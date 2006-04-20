@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
@@ -64,6 +65,89 @@ namespace Mercent.SqlServer.Management.Tests
 			scripter.Script(new SqlSmoObject[] { database.Views["vwTable1"], database.UserDefinedFunctions["Udf1"] });
 		}
 
+		[Test]
+		public void TestDatabase()
+		{
+			Database database = server.Databases["SEM_Merchant"];
+			//server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
+			//database.Rename("$(NEW_DB_NAME)");
+			////server.ConnectionContext.CapturedSql.Clear();
+			//database.Create();
+			//database.Alter();
+			////database.DatabaseOptions.
+			//foreach(string line in server.ConnectionContext.CapturedSql.Text)
+			//{
+			//    Console.WriteLine(line);
+			//}
+			ScriptingOptions options = new ScriptingOptions();
+			options.ToFileOnly = true;
+			options.NoFileGroup = true;
+			options.FileName = "database.sql";
+			options.IncludeIfNotExists = true;
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			scripter.Script(new SqlSmoObject[] { database });
+		}
+
+		[Test]
+		public void TestAssemblies()
+		{
+			Database database = server.Databases["SEM_Merchant"];
+
+			ScriptingOptions assemblyOptions = new ScriptingOptions();
+			assemblyOptions.ToFileOnly = true;
+			assemblyOptions.Encoding = System.Text.Encoding.UTF8;
+			assemblyOptions.Permissions = true;
+
+			Scripter assemblyScripter = new Scripter(server);
+			assemblyScripter.Options = assemblyOptions;
+			assemblyScripter.PrefetchObjects = false;
+
+			string dir = "Assemblies";
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			database.PrefetchObjects(typeof(SqlAssembly), assemblyOptions);
+			
+			foreach(SqlAssembly assembly in database.Assemblies)
+			{
+				string filename = Path.Combine(dir, assembly.Name + ".sql");
+				assemblyScripter.Options.AppendToFile = false;
+				assemblyScripter.Options.FileName = filename;
+				assemblyScripter.ScriptWithList(new SqlSmoObject[] { assembly });
+				DependencyTree tree = assemblyScripter.DiscoverDependencies(new SqlSmoObject[] { assembly }, DependencyType.Children);
+				if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
+				{
+					UrnCollection children = new UrnCollection();
+					for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
+					{
+						children.Add(child.Urn);
+						Console.WriteLine(child.Urn);
+					}
+					assemblyScripter.Options.AppendToFile = true;
+					assemblyScripter.ScriptWithList(children);
+				}
+			}
+
+		}
+
+		[Test]
+		public void TransferDatabase()
+		{
+			ScriptingOptions options = new ScriptingOptions();
+			options.ToFileOnly = true;
+			options.FileName = "TransferDatabase.sql";
+			Database database = server.Databases["SEM_Merchant"];
+			Transfer transfer = new Transfer(database);
+			transfer.CreateTargetDatabase = true;
+			transfer.DestinationDatabase = "$(NEW_DB_NAME)";
+			transfer.Options = options;
+			transfer.PrefetchObjects = false;
+			transfer.ObjectList = new ArrayList();
+			transfer.ObjectList.Add(database);
+			transfer.CopyAllObjects = false;
+			transfer.ScriptTransfer();
+		}
 
 		[Test]
 		public void TransferTables()
@@ -76,6 +160,36 @@ namespace Mercent.SqlServer.Management.Tests
 			Transfer transfer = new Transfer(database);
 			transfer.CopyAllObjects = false;
 			transfer.CopyAllTables = true;
+			transfer.Options = options;
+			transfer.ScriptTransfer();
+		}
+
+		[Test]
+		public void TransferTypes()
+		{
+			ScriptingOptions options = new ScriptingOptions();
+			options.ToFileOnly = true;
+			options.FileName = "TransferTypes.sql";
+
+			Database database = server.Databases["SEM_Merchant"];
+			Transfer transfer = new Transfer(database);
+			transfer.CopyAllObjects = false;
+			transfer.CopyAllUserDefinedDataTypes = true;
+			transfer.CopyAllUserDefinedTypes = true;
+			transfer.Options = options;
+			transfer.ScriptTransfer();
+		}
+
+		[Test]
+		public void TransferAssemblies()
+		{
+			ScriptingOptions options = new ScriptingOptions();
+			options.ToFileOnly = true;
+			options.FileName = "TransferAssemblies.sql";
+			Database database = server.Databases["SEM_Merchant"];
+			Transfer transfer = new Transfer(database);
+			transfer.CopyAllObjects = false;
+			transfer.CopyAllSqlAssemblies = true;
 			transfer.Options = options;
 			transfer.ScriptTransfer();
 		}
@@ -323,6 +437,48 @@ namespace Mercent.SqlServer.Management.Tests
 					udfScripter.Options.FileName = filename;
 					udfScripter.ScriptWithList(new SqlSmoObject[] { udf });
 				}
+			}
+		}
+
+		[Test]
+		public void TestUdts()
+		{
+			Database database = server.Databases["SEM_Merchant"];
+
+			ScriptingOptions udtOptions = new ScriptingOptions();
+			udtOptions.ToFileOnly = true;
+			udtOptions.Encoding = System.Text.Encoding.UTF8;
+			udtOptions.Permissions = true;
+
+			Scripter udtScripter = new Scripter(server);
+			udtScripter.Options = udtOptions;
+			udtScripter.PrefetchObjects = false;
+
+			//string dir = "Types";
+			//if(!Directory.Exists(dir))
+			//	Directory.CreateDirectory(dir);
+
+			//database.PrefetchObjects(typeof(UserDefinedDataType), udtOptions);
+			database.PrefetchObjects(typeof(UserDefinedType), udtOptions);
+			SqlSmoObject[] udts = new SqlSmoObject[database.UserDefinedDataTypes.Count + database.UserDefinedTypes.Count];
+			int i = 0;
+			for(; i < database.UserDefinedDataTypes.Count; i++)
+			{
+				udts[i] = database.UserDefinedDataTypes[i];
+			}
+			for(int i2 = 0; i2 < database.UserDefinedTypes.Count; i2++, i++)
+			{
+				udts[i] = database.UserDefinedTypes[i2];
+			}
+			udtScripter.Options.FileName = "Types.sql";
+			udtScripter.ScriptWithList(udts);
+
+			DependencyWalker walker = new DependencyWalker(server);
+			DependencyTree tree = walker.DiscoverDependencies(udts, DependencyType.Parents);
+			DependencyCollection dependencies = walker.WalkDependencies(tree);
+			foreach(DependencyCollectionNode node in dependencies)
+			{
+				Console.WriteLine(node.Urn);
 			}
 		}
 

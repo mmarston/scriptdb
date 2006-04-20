@@ -55,8 +55,11 @@ namespace Mercent.SqlServer.Management
 
 			database = server.Databases[databaseName];
 
+			ScriptDatabase();
 			ScriptRoles();
 			ScriptSchemas();
+			ScriptAssemblies();
+			ScriptUserDefinedDataTypes();
 			
 			ScriptTables();
 			// TODO: still need to test/resolve dependencies between tables/udfs
@@ -66,13 +69,14 @@ namespace Mercent.SqlServer.Management
 
 			using(StreamWriter writer = new StreamWriter(Path.Combine(OutputDirectory, "CreateDatabaseObjects.sql"), false, Encoding))
 			{
+				writer.WriteLine(":on error exit");
 				foreach(string fileName in this.fileNames)
 				{
 					writer.WriteLine("PRINT '{0}'", fileName);
 					writer.WriteLine("GO", fileName);
 					if(Path.GetExtension(fileName) == ".dat")
 					{
-						writer.WriteLine("!!bcp \"$(SQLCMDDBNAME).{0}\" in \"{1}\" -S $(SQLCMDSERVER) -T -n -k", Path.GetFileNameWithoutExtension(fileName), fileName);
+						writer.WriteLine("!!bcp \"$(DBNAME).{0}\" in \"{1}\" -S $(SQLCMDSERVER) -T -n -k -E", Path.GetFileNameWithoutExtension(fileName), fileName);
 					}
 					else
 					{
@@ -82,7 +86,6 @@ namespace Mercent.SqlServer.Management
 			}
 
 			// Here is a list of database objects that currently are not being scripted:
-			//database.Assemblies;
 			//database.AsymmetricKeys;
 			//database.Certificates;
 			//database.ExtendedStoredProcedures;
@@ -92,11 +95,9 @@ namespace Mercent.SqlServer.Management
 			//database.Rules;
 			//database.ServiceBroker;
 			//database.SymmetricKeys;
+			//database.Synonyms;
 			//database.Triggers;
 			//database.Users;
-			//database.UserDefinedAggregates;
-			//database.UserDefinedDataTypes;
-			//database.UserDefinedTypes;
 			//database.XmlSchemaCollections;
 
 			fileNames.Add("CreateDatabaseObjects.sql");
@@ -131,6 +132,91 @@ namespace Mercent.SqlServer.Management
 				if((subDirInfo.Attributes & FileAttributes.Hidden) != FileAttributes.Hidden)
 					PromptDeleteFiles(subDirInfo, subDirInfo.Name);
 			}
+		}
+
+		private void ScriptAssemblies()
+		{
+			ScriptingOptions options = new ScriptingOptions();
+			options.ToFileOnly = true;
+			options.AppendToFile = false;
+			options.Encoding = this.Encoding;
+			options.Permissions = true;
+
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			scripter.PrefetchObjects = false;
+			database.PrefetchObjects(typeof(SqlAssembly), options);
+
+			if(database.Assemblies.Count > 0)
+			{
+				string relativeDir = "Assemblies";
+				string dir = Path.Combine(OutputDirectory, relativeDir);
+				if(!Directory.Exists(dir))
+					Directory.CreateDirectory(dir);
+
+				SqlSmoObject[] objects = new SqlSmoObject[1];
+				foreach(SqlAssembly assembly in database.Assemblies)
+				{
+					string filename = Path.Combine(relativeDir, assembly.Name + ".sql");
+					options.FileName = Path.Combine(OutputDirectory, filename);
+					scripter.Options.AppendToFile = false;
+					objects[0] = assembly;
+					Console.WriteLine(options.FileName);
+					scripter.ScriptWithList(objects);
+					DependencyTree tree = scripter.DiscoverDependencies(objects, DependencyType.Children);
+					// tree.FirstChild is the assembly and tree.FirstChild.FirstChild is the first dependent object
+					if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
+					{
+						UrnCollection children = new UrnCollection();
+						// loop through the children, which should be the SQL CLR objects such
+						// as user defined functions, user defined types, etc.
+						for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
+						{
+							children.Add(child.Urn);
+						}
+						// script out the dependent objects, appending to the file
+						scripter.Options.AppendToFile = true;
+						scripter.ScriptWithList(children);
+					}
+					this.fileNames.Add(filename);
+				}
+			}
+		}
+
+		private void ScriptDatabase()
+		{
+			string fileName = "Database.sql";
+			ScriptingOptions options = new ScriptingOptions();
+			//options.Permissions = true;
+			options.AllowSystemObjects = false;
+			options.IncludeIfNotExists = true;
+			options.NoFileGroup = true;
+
+
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+
+			Console.WriteLine(Path.Combine(this.OutputDirectory, fileName));
+
+			StringCollection batches = scripter.ScriptWithList(new SqlSmoObject[] { database });
+			string oldName = database.Name;
+			string oldNameIdentifier = "[" + oldName + "]";
+			string oldNameLiteral = "N'" + oldName + "'";
+			string newName = "$(DBNAME)";
+			string newNameIdentifier = "[" + newName + "]";
+			string newNameLiteral = "N'" + newName + "'";
+			
+			using(TextWriter writer = new StreamWriter(Path.Combine(this.OutputDirectory, fileName), false, Encoding))
+			{
+				foreach(string batch in batches)
+				{
+					writer.WriteLine(batch.Replace(oldNameIdentifier, newNameIdentifier).Replace(oldNameLiteral, newNameLiteral));
+					writer.WriteLine("GO");
+				}
+				writer.WriteLine("USE " + newNameIdentifier);
+				writer.WriteLine("GO");
+			}
+			this.fileNames.Add(fileName);
 		}
 
 		private void ScriptTables()
@@ -536,5 +622,30 @@ namespace Mercent.SqlServer.Management
 			transfer.ScriptTransfer();
 			this.fileNames.Add(fileName);
 		}
+
+		private void ScriptUserDefinedDataTypes()
+		{
+			string fileName = "Types.sql";
+			ScriptingOptions options = new ScriptingOptions();
+			options.FileName = Path.Combine(this.OutputDirectory, fileName);
+			options.ToFileOnly = true;
+			options.Encoding = Encoding;
+			options.Permissions = true;
+			options.AllowSystemObjects = false;
+			options.IncludeIfNotExists = true;
+
+			if(database.UserDefinedDataTypes.Count > 0)
+			{
+				Console.WriteLine(options.FileName);
+
+				Transfer transfer = new Transfer(database);
+				transfer.Options = options;
+				transfer.CopyAllObjects = false;
+				transfer.CopyAllUserDefinedDataTypes = true;
+				transfer.ScriptTransfer();
+				this.fileNames.Add(fileName);
+			}
+		}
+
 	}
 }
