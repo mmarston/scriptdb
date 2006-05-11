@@ -19,8 +19,8 @@ namespace Mercent.SqlServer.Management.Tests
 		[SetUp]
 		public void SetUp()
 		{
-			server = new Server(@"mmarston\sql2005");
-			//server = new Server(@"tank\sql2005rtm");
+			//server = new Server(@"mmarston\sql2005");
+			server = new Server(@"tank");
 			//server.SetDefaultInitFields(typeof(StoredProcedure), "IsSystemObject");
 			//server.SetDefaultInitFields(typeof(UserDefinedFunction), "IsSystemObject");
 			//server.SetDefaultInitFields(typeof(View), true);
@@ -370,17 +370,17 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestStoredProcedures()
 		{
-			Database database = server.Databases["SEM_Merchant"];
+			Database database = server.Databases["Product_Datawarehouse"];
 
 			ScriptingOptions dropOptions = new ScriptingOptions();
-			dropOptions.ToFileOnly = true;
+			//dropOptions.ToFileOnly = true;
 			dropOptions.Encoding = System.Text.Encoding.UTF8;
 			dropOptions.IncludeIfNotExists = true;
 			dropOptions.ScriptDrops = true;
 			
 			ScriptingOptions sprocOptions = new ScriptingOptions();
-			sprocOptions.ToFileOnly = true;
-			sprocOptions.AppendToFile = true;
+			//sprocOptions.ToFileOnly = true;
+			//sprocOptions.AppendToFile = true;
 			sprocOptions.Encoding = System.Text.Encoding.UTF8;
 			sprocOptions.Permissions = true;
 
@@ -398,16 +398,32 @@ namespace Mercent.SqlServer.Management.Tests
 				if (!sproc.IsSystemObject)
 				{
 					string filename = Path.Combine("Stored Procedures", sproc.Schema + "." + sproc.Name + ".prc");
-					dropOptions.FileName = filename;
-					sprocOptions.FileName = filename;
+					//dropOptions.FileName = filename;
+					//sprocOptions.FileName = filename;
 					sprocScripter.Options = dropOptions;
-					sprocScripter.ScriptWithList(new SqlSmoObject[] { sproc });
-					sprocScripter.Options = sprocOptions;
-					sprocScripter.ScriptWithList(new SqlSmoObject[] { sproc });
+					using(TextWriter writer = new StreamWriter(filename, false))
+					{
+						StringCollection batches = sprocScripter.ScriptWithList(new SqlSmoObject[] { sproc });
+						foreach(string batch in batches)
+						{
+							writer.WriteLine(batch.Trim());
+							writer.WriteLine("GO");
+						}
+						sprocScripter.Options = sprocOptions;
+
+						batches = sprocScripter.ScriptWithList(new SqlSmoObject[] { sproc });
+						foreach(string batch in batches)
+						{
+							writer.WriteLine(batch.Trim());
+							writer.WriteLine("GO");
+						}
+					}
 
 				}
 			}
 		}
+
+		
 
 		[Test]
 		public void TestUdfs()

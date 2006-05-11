@@ -351,14 +351,11 @@ namespace Mercent.SqlServer.Management
 		private void ScriptViews()
 		{
 			ScriptingOptions dropOptions = new ScriptingOptions();
-			dropOptions.ToFileOnly = true;
 			dropOptions.Encoding = Encoding;
 			dropOptions.IncludeIfNotExists = true;
 			dropOptions.ScriptDrops = true; 
 			
 			ScriptingOptions viewOptions = new ScriptingOptions();
-			viewOptions.ToFileOnly = true;
-			viewOptions.AppendToFile = true;
 			viewOptions.Encoding = Encoding;
 			viewOptions.Indexes = true;
 			viewOptions.Permissions = true;
@@ -369,8 +366,6 @@ namespace Mercent.SqlServer.Management
 			viewScripter.PrefetchObjects = false;
 
 			ScriptingOptions triggerOptions = new ScriptingOptions();
-			triggerOptions.ToFileOnly = true;
-			triggerOptions.AppendToFile = true;
 			triggerOptions.Encoding = Encoding;
 			triggerOptions.PrimaryObject = false;
 			triggerOptions.Triggers = true;
@@ -400,27 +395,31 @@ namespace Mercent.SqlServer.Management
 				if (!view.IsSystemObject)
 				{
 					string filename = Path.Combine(relativeDir, view.Schema + "." + view.Name + ".viw");
-					dropOptions.FileName = viewOptions.FileName = Path.Combine(OutputDirectory, filename);
-					Console.WriteLine(viewOptions.FileName);
-						
-					objects[0] = view;
-					viewScripter.Options = dropOptions;
-					viewScripter.ScriptWithList(objects);
-					viewScripter.Options = viewOptions;
-					viewScripter.ScriptWithList(objects);
+					string outputFileName = Path.Combine(OutputDirectory, filename);
+					Console.WriteLine(outputFileName);
+					using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+					{
+						objects[0] = view;
+						viewScripter.Options = dropOptions;
+						WriteBatches(writer, viewScripter.ScriptWithList(objects));
+						viewScripter.Options = viewOptions;
+						WriteBatches(writer, viewScripter.ScriptWithList(objects));
+					}
 					urns.Add(view.Urn);
 
 					foreach(Trigger trigger in view.Triggers)
 					{
 						filename = Path.Combine(relativeDir, view.Schema + "." + trigger.Name + ".trg"); // is the trigger schema the same as the view?
-						dropOptions.FileName = triggerOptions.FileName = Path.Combine(OutputDirectory, filename);
-						Console.WriteLine(triggerOptions.FileName);
-
-						objects[0] = trigger;
-						triggerScripter.Options = dropOptions;
-						triggerScripter.ScriptWithList(objects);
-						triggerScripter.Options = triggerOptions;
-						triggerScripter.ScriptWithList(objects);
+						outputFileName = Path.Combine(OutputDirectory, filename);
+						Console.WriteLine(outputFileName);
+						using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+						{
+							objects[0] = trigger;
+							triggerScripter.Options = dropOptions;
+							WriteBatches(writer, triggerScripter.ScriptWithList(objects));
+							triggerScripter.Options = triggerOptions;
+							WriteBatches(writer, triggerScripter.ScriptWithList(objects));
+						}
 						triggerFileNames.Add(filename);
 					}
 				}
@@ -447,14 +446,11 @@ namespace Mercent.SqlServer.Management
 		private void ScriptStoredProcedures()
 		{
 			ScriptingOptions dropOptions = new ScriptingOptions();
-			dropOptions.ToFileOnly = true;
 			dropOptions.Encoding = Encoding;
 			dropOptions.IncludeIfNotExists = true;
 			dropOptions.ScriptDrops = true;
 
 			ScriptingOptions options = new ScriptingOptions();
-			options.ToFileOnly = true;
-			options.AppendToFile = true;
 			options.Encoding = Encoding;
 			options.Permissions = true;
 
@@ -475,14 +471,16 @@ namespace Mercent.SqlServer.Management
 				if (!sproc.IsSystemObject)
 				{
 					string filename = Path.Combine(relativeDir, sproc.Schema + "." + sproc.Name + ".prc");
-					dropOptions.FileName = options.FileName = Path.Combine(OutputDirectory, filename);
-					Console.WriteLine(options.FileName);
-
-					objects[0] = sproc;
-					scripter.Options = dropOptions;
-					scripter.ScriptWithList(objects);
-					scripter.Options = options;
-					scripter.ScriptWithList(objects);
+					string outputFileName = Path.Combine(OutputDirectory, filename);
+					Console.WriteLine(outputFileName);
+					using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+					{
+						objects[0] = sproc;
+						scripter.Options = dropOptions;
+						WriteBatches(writer, scripter.ScriptWithList(objects));
+						scripter.Options = options;
+						WriteBatches(writer, scripter.ScriptWithList(objects));
+					}
 					urns.Add(sproc.Urn);
 				}
 			}
@@ -507,14 +505,11 @@ namespace Mercent.SqlServer.Management
 		private void ScriptUserDefinedFunctions()
 		{
 			ScriptingOptions dropOptions = new ScriptingOptions();
-			dropOptions.ToFileOnly = true;
 			dropOptions.Encoding = Encoding;
 			dropOptions.IncludeIfNotExists = true;
 			dropOptions.ScriptDrops = true;
 
 			ScriptingOptions options = new ScriptingOptions();
-			options.ToFileOnly = true;
-			options.AppendToFile = true;
 			options.Encoding = this.Encoding;
 			options.Permissions = true;
 
@@ -535,14 +530,16 @@ namespace Mercent.SqlServer.Management
 				if (!udf.IsSystemObject)
 				{
 					string filename = Path.Combine(relativeDir, udf.Schema + "." + udf.Name + ".udf");
-					dropOptions.FileName = options.FileName = Path.Combine(OutputDirectory, filename);
-					Console.WriteLine(options.FileName);
-
-					objects[0] = udf;
-					scripter.Options = dropOptions;
-					scripter.ScriptWithList(objects);
-					scripter.Options = options;
-					scripter.ScriptWithList(objects);
+					string outputFileName = Path.Combine(OutputDirectory, filename);
+					Console.WriteLine(outputFileName);
+					using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+					{
+						objects[0] = udf;
+						scripter.Options = dropOptions;
+						WriteBatches(writer, scripter.ScriptWithList(objects));
+						scripter.Options = options;
+						WriteBatches(writer, scripter.ScriptWithList(objects));
+					}
 					urns.Add(udf.Urn);
 				}
 			}
@@ -644,6 +641,32 @@ namespace Mercent.SqlServer.Management
 				transfer.CopyAllUserDefinedDataTypes = true;
 				transfer.ScriptTransfer();
 				this.fileNames.Add(fileName);
+			}
+		}
+
+		/// <summary>
+		/// Writes out batches of SQL statements.
+		/// </summary>
+		/// <param name="writer">TextWriter to write to.</param>
+		/// <param name="batches">Collection of SQL statements.</param>
+		/// <remarks>
+		/// Each string in the collection of SQL statements is trimmed before being written.
+		/// A 'GO' statement is added after each one.
+		/// </remarks>
+		private void WriteBatches(TextWriter writer, StringCollection batches)
+		{
+			foreach(string batch in batches)
+			{
+				writer.WriteLine(batch.Trim());
+				writer.WriteLine("GO");
+			}
+		}
+
+		private void WriteBatches(string fileName, StringCollection batches)
+		{
+			using(TextWriter writer = new StreamWriter(fileName, false, this.Encoding))
+			{
+				WriteBatches(writer, batches);
 			}
 		}
 
