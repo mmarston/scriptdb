@@ -222,7 +222,6 @@ namespace Mercent.SqlServer.Management
 		private void ScriptTables()
 		{
 			ScriptingOptions tableOptions = new ScriptingOptions();
-			tableOptions.ToFileOnly = true;
 			tableOptions.Encoding = this.Encoding;
 
 			Scripter tableScripter = new Scripter(server);
@@ -232,7 +231,6 @@ namespace Mercent.SqlServer.Management
 			// this list might be able to be trimmed down because
 			// some of the options may overlap (e.g. DriIndexes and Indexes).
 			ScriptingOptions kciOptions = new ScriptingOptions();
-			kciOptions.ToFileOnly = true;
 			kciOptions.Encoding = this.Encoding;
 			kciOptions.PrimaryObject = false;
 			kciOptions.ClusteredIndexes = true;
@@ -255,7 +253,6 @@ namespace Mercent.SqlServer.Management
 			kciScripter.PrefetchObjects = false;
 
 			ScriptingOptions fkyOptions = new ScriptingOptions();
-			fkyOptions.ToFileOnly = true;
 			fkyOptions.Encoding = this.Encoding;
 			fkyOptions.DriForeignKeys = true;
 			fkyOptions.PrimaryObject = false;
@@ -315,21 +312,21 @@ namespace Mercent.SqlServer.Management
 					objects[0] = table;
 					string filename = Path.Combine(relativeDir, table.Schema + "." + table.Name + ".tab");
 					tabFileNames.Add(filename);
-					tableOptions.FileName = Path.Combine(OutputDirectory, filename);
-					Console.WriteLine(tableOptions.FileName);
-					tableScripter.ScriptWithList(objects);
+					string outputFileName = Path.Combine(OutputDirectory, filename);
+					Console.WriteLine(outputFileName);
+					WriteBatches(outputFileName, tableScripter.ScriptWithList(objects));
 
 					filename = Path.ChangeExtension(filename, ".kci");
 					kciFileNames.Add(filename);
-					kciOptions.FileName = Path.Combine(OutputDirectory, filename);
-					Console.WriteLine(kciOptions.FileName);
-					kciScripter.ScriptWithList(objects);
+					outputFileName = Path.Combine(OutputDirectory, filename);
+					Console.WriteLine(outputFileName);
+					WriteBatches(outputFileName, kciScripter.ScriptWithList(objects));
 
 					filename = Path.ChangeExtension(filename, ".fky");
 					fkyFileNames.Add(filename);
-					fkyOptions.FileName = Path.Combine(OutputDirectory, filename);
-					Console.WriteLine(fkyOptions.FileName);
-					fkyScripter.ScriptWithList(objects);
+					outputFileName = Path.Combine(OutputDirectory, filename);
+					Console.WriteLine(outputFileName);
+					WriteBatches(outputFileName, fkyScripter.ScriptWithList(objects));
 
 					if(table.RowCount > 0)
 					{
