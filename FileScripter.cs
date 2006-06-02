@@ -76,7 +76,11 @@ namespace Mercent.SqlServer.Management
 					writer.WriteLine("GO", fileName);
 					if(Path.GetExtension(fileName) == ".dat")
 					{
-						writer.WriteLine("!!bcp \"$(DBNAME).{0}\" in \"{1}\" -S $(SQLCMDSERVER) -T -n -k -E", Path.GetFileNameWithoutExtension(fileName), fileName);
+						// Note: this won't work if the schema or table name contain a dot ('.').
+						string[] tableParts = Path.GetFileNameWithoutExtension(fileName).Split(new char[]{'.'});
+						string schemaName = tableParts[0];
+						string tableName = tableParts[1];
+						writer.WriteLine("!!bcp \"[$(DBNAME)].[{0}].[{1}]\" in \"{2}\" -S $(SQLCMDSERVER) -T -n -k -E", schemaName, tableName, fileName);
 					}
 					else
 					{
@@ -237,6 +241,7 @@ namespace Mercent.SqlServer.Management
 			kciOptions.DriChecks = true;
 			kciOptions.DriClustered = true;
 			kciOptions.DriDefaults = true;
+			kciOptions.DriIncludeSystemNames = true;
 			kciOptions.DriIndexes = true;
 			kciOptions.DriNonClustered = true;
 			kciOptions.DriPrimaryKey = true;
@@ -255,6 +260,7 @@ namespace Mercent.SqlServer.Management
 			ScriptingOptions fkyOptions = new ScriptingOptions();
 			fkyOptions.Encoding = this.Encoding;
 			fkyOptions.DriForeignKeys = true;
+			fkyOptions.DriIncludeSystemNames = true;
 			fkyOptions.PrimaryObject = false;
 			fkyOptions.SchemaQualifyForeignKeysReferences = true;
 
