@@ -19,8 +19,8 @@ namespace Mercent.SqlServer.Management.Tests
 		[SetUp]
 		public void SetUp()
 		{
-			//server = new Server(@"mmarston\sql2005");
-			server = new Server(@"tank");
+			server = new Server(@"mmarston");
+			//server = new Server(@"tank");
 			//server.SetDefaultInitFields(typeof(StoredProcedure), "IsSystemObject");
 			//server.SetDefaultInitFields(typeof(UserDefinedFunction), "IsSystemObject");
 			//server.SetDefaultInitFields(typeof(View), true);
@@ -627,6 +627,28 @@ namespace Mercent.SqlServer.Management.Tests
 			//transfer.CopyAllUsers = true;
 			//transfer.CopyAllRoles = true;
 			//transfer.CopyAllSchemas = true;
+			transfer.ScriptTransfer();
+		}
+
+		[Test]
+		public void TestTransferSynonyms()
+		{
+			Database database = server.Databases["Dev_Merchant"];
+
+			string fileName = "TransferSynonyms.sql";
+			ScriptingOptions options = new ScriptingOptions();
+			options.FileName = fileName;
+			options.ToFileOnly = true;
+			options.Encoding = System.Text.Encoding.UTF8;
+			options.Permissions = true;
+			options.AllowSystemObjects = false;
+			//options.WithDependencies = true;
+			//options.IncludeIfNotExists = true;
+
+			Transfer transfer = new Transfer(database);
+			transfer.Options = options;
+			transfer.CopyAllObjects = false;
+			transfer.CopyAllSynonyms = true;
 			transfer.ScriptTransfer();
 		}
 

@@ -58,6 +58,7 @@ namespace Mercent.SqlServer.Management
 			ScriptDatabase();
 			ScriptRoles();
 			ScriptSchemas();
+			ScriptSynonyms();
 			ScriptAssemblies();
 			ScriptUserDefinedDataTypes();
 			
@@ -471,7 +472,7 @@ namespace Mercent.SqlServer.Management
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 			foreach (StoredProcedure sproc in database.StoredProcedures)
 			{
-				if (!sproc.IsSystemObject)
+				if (!sproc.IsSystemObject && sproc.ImplementationType == ImplementationType.TransactSql)
 				{
 					string filename = Path.Combine(relativeDir, sproc.Schema + "." + sproc.Name + ".prc");
 					string outputFileName = Path.Combine(OutputDirectory, filename);
@@ -530,7 +531,7 @@ namespace Mercent.SqlServer.Management
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 			foreach (UserDefinedFunction udf in database.UserDefinedFunctions)
 			{
-				if (!udf.IsSystemObject)
+				if (!udf.IsSystemObject && udf.ImplementationType == ImplementationType.TransactSql)
 				{
 					string filename = Path.Combine(relativeDir, udf.Schema + "." + udf.Name + ".udf");
 					string outputFileName = Path.Combine(OutputDirectory, filename);
@@ -623,19 +624,43 @@ namespace Mercent.SqlServer.Management
 			this.fileNames.Add(fileName);
 		}
 
+		private void ScriptSynonyms()
+		{
+			if(database.Synonyms.Count > 0)
+			{
+				string fileName = "Synonyms.sql";
+				ScriptingOptions options = new ScriptingOptions();
+				options.FileName = Path.Combine(OutputDirectory, fileName);
+				options.ToFileOnly = true;
+				options.Encoding = Encoding;
+				options.Permissions = true;
+				options.AllowSystemObjects = false;
+				options.IncludeIfNotExists = true;
+
+				Console.WriteLine(options.FileName);
+
+				Transfer transfer = new Transfer(database);
+				transfer.Options = options;
+				transfer.CopyAllObjects = false;
+				transfer.CopyAllSynonyms = true;
+				transfer.ScriptTransfer();
+				this.fileNames.Add(fileName);
+			}
+		}
+
 		private void ScriptUserDefinedDataTypes()
 		{
-			string fileName = "Types.sql";
-			ScriptingOptions options = new ScriptingOptions();
-			options.FileName = Path.Combine(this.OutputDirectory, fileName);
-			options.ToFileOnly = true;
-			options.Encoding = Encoding;
-			options.Permissions = true;
-			options.AllowSystemObjects = false;
-			options.IncludeIfNotExists = true;
-
 			if(database.UserDefinedDataTypes.Count > 0)
 			{
+				string fileName = "Types.sql";
+				ScriptingOptions options = new ScriptingOptions();
+				options.FileName = Path.Combine(this.OutputDirectory, fileName);
+				options.ToFileOnly = true;
+				options.Encoding = Encoding;
+				options.Permissions = true;
+				options.AllowSystemObjects = false;
+				options.IncludeIfNotExists = true;
+
 				Console.WriteLine(options.FileName);
 
 				Transfer transfer = new Transfer(database);
