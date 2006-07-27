@@ -92,7 +92,7 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestAssemblies()
 		{
-			Database database = server.Databases["SEM_Merchant"];
+			Database database = server.Databases["Product_Merchant"];
 
 			ScriptingOptions assemblyOptions = new ScriptingOptions();
 			assemblyOptions.ToFileOnly = true;
@@ -108,26 +108,52 @@ namespace Mercent.SqlServer.Management.Tests
 				Directory.CreateDirectory(dir);
 
 			// do not prefetch assemblies--it doesn't script out the AssemblySecurityLevel!
-			//database.PrefetchObjects(typeof(SqlAssembly), assemblyOptions);
-			
+			database.PrefetchObjects(typeof(SqlAssembly), assemblyOptions);
+			server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
 			foreach(SqlAssembly assembly in database.Assemblies)
 			{
-				//AssemblySecurityLevel securityLevel = assembly.AssemblySecurityLevel;
+				AssemblySecurityLevel securityLevel = assembly.AssemblySecurityLevel;
 				string filename = Path.Combine(dir, assembly.Name + ".sql");
 				assemblyScripter.Options.AppendToFile = false;
 				assemblyScripter.Options.FileName = filename;
 				assemblyScripter.ScriptWithList(new SqlSmoObject[] { assembly });
-				DependencyTree tree = assemblyScripter.DiscoverDependencies(new SqlSmoObject[] { assembly }, DependencyType.Children);
-				if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
+				// Check if the assembly is visible.
+				// If the assembly is visible then it can have CLR objects.
+				// If the assembly is not visible then it is intended to be called from
+				// other assemblies.
+				if(assembly.IsVisible)
 				{
-					UrnCollection children = new UrnCollection();
-					for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
+					DependencyTree tree = assemblyScripter.DiscoverDependencies(new SqlSmoObject[] { assembly }, DependencyType.Children);
+					if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
 					{
-						children.Add(child.Urn);
-						Console.WriteLine(child.Urn);
+						UrnCollection children = new UrnCollection();
+						for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
+						{
+							if(child.Urn.Type != "SqlAssembly")
+								children.Add(child.Urn);
+							Console.WriteLine(child.Urn);
+						}
+						assemblyScripter.Options.AppendToFile = true;
+						assemblyScripter.ScriptWithList(children);
 					}
-					assemblyScripter.Options.AppendToFile = true;
-					assemblyScripter.ScriptWithList(children);
+				}
+				else
+				{
+					// The create script doesn't include the VISIBILITY (this appears
+					// to be a bug in SQL SMO) so we change it and generate an alter
+					// statement.
+					assembly.IsVisible = true;
+					assembly.IsVisible = false;
+					server.ConnectionContext.CapturedSql.Clear();
+					assembly.Alter();
+					// grab the second string in the collection
+					// (the first is a USE statement to set the database context)
+					using(TextWriter writer = new StreamWriter(filename, true))
+					{
+						writer.WriteLine(server.ConnectionContext.CapturedSql.Text[1]);
+						writer.WriteLine("GO");
+					}
+
 				}
 			}
 
@@ -519,6 +545,7 @@ namespace Mercent.SqlServer.Management.Tests
 
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
+			server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
 			
 
 			List<SqlSmoObject> roleList = new List<SqlSmoObject>();
@@ -535,12 +562,14 @@ namespace Mercent.SqlServer.Management.Tests
 							{
 								Console.WriteLine(line);
 							}
+							role.Alter();
 							Console.WriteLine("sp_addrolemember N'{0}', N'{1}'", role.Name.Replace("'", "''"), member.Replace("'", "''"));
 							Console.WriteLine("GO");
 						}
 					}
-				
 			}
+
+			Console.WriteLine(server.ConnectionContext.CapturedSql.ToString());
 
 			foreach (ApplicationRole role in database.ApplicationRoles)
 			{

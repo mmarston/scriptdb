@@ -52,6 +52,9 @@ namespace Mercent.SqlServer.Management
 			fileNames.Clear();
 			
 			server = new Server(ServerName);
+			// Set the execution mode to capture SQL (this is like saving the script
+			// when editing sql objects in Management Studio).
+			server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
 
 			database = server.Databases[databaseName];
 
@@ -167,7 +170,7 @@ namespace Mercent.SqlServer.Management
 				DependencyTree tree;
 				foreach(SqlAssembly assembly in database.Assemblies)
 				{
-					// It doesn't seem to script AssemblySecurityLevel unless I access it here!
+					// It doesn't seem to script AssemblySecurityLevel unless it has been accessed first!
 					AssemblySecurityLevel securityLevel = assembly.AssemblySecurityLevel;
 
 					string filename = Path.Combine(relativeDir, assembly.Name + ".sql");
@@ -177,24 +180,45 @@ namespace Mercent.SqlServer.Management
 					
 					Console.WriteLine(options.FileName);
 					scripter.ScriptWithList(objects);
-					tree = scripter.DiscoverDependencies(objects, DependencyType.Children);
-					// tree.FirstChild is the assembly and tree.FirstChild.FirstChild is the first dependent object
-					if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
+					// Check if the assembly is visible.
+					// If the assembly is visible then it can have CLR objects.
+					// If the assembly is not visible then it is intended to be called from
+					// other assemblies.
+					if(assembly.IsVisible)
 					{
-						UrnCollection children = new UrnCollection();
-						// loop through the children, which should be the SQL CLR objects such
-						// as user defined functions, user defined types, etc.
-						for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
+						tree = scripter.DiscoverDependencies(objects, DependencyType.Children);
+						// tree.FirstChild is the assembly and tree.FirstChild.FirstChild is the first dependent object
+						if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
 						{
-							// Make sure the object isn't another SqlAssembly that depends on this assembly
-							// because we don't want to include the script for the other assembly in the 
-							// script for this assembly
-							if(child.Urn.Type != "SqlAssembly")
-								children.Add(child.Urn);
+							UrnCollection children = new UrnCollection();
+							// loop through the children, which should be the SQL CLR objects such
+							// as user defined functions, user defined types, etc.
+							for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
+							{
+								// Make sure the object isn't another SqlAssembly that depends on this assembly
+								// because we don't want to include the script for the other assembly in the 
+								// script for this assembly
+								if(child.Urn.Type != "SqlAssembly")
+									children.Add(child.Urn);
+							}
+							// script out the dependent objects, appending to the file
+							scripter.Options.AppendToFile = true;
+							scripter.ScriptWithList(children);
 						}
-						// script out the dependent objects, appending to the file
-						scripter.Options.AppendToFile = true;
-						scripter.ScriptWithList(children);
+					}
+					else
+					{
+						// The create script doesn't include VISIBILITY (this appears
+						// to be a bug in SQL SMO) here we reset it and call Alter()
+						// to generate an alter statement.
+						assembly.IsVisible = true;
+						assembly.IsVisible = false;
+						server.ConnectionContext.CapturedSql.Clear();
+						assembly.Alter();
+						StringCollection batches = server.ConnectionContext.CapturedSql.Text;
+						// Remove the first string, which is a USE statement to set the database context
+						batches.RemoveAt(0);
+						WriteBatches(options.FileName, true, server.ConnectionContext.CapturedSql.Text);
 					}
 					assemblies.Add(assembly.Urn);
 				}
@@ -670,13 +694,24 @@ namespace Mercent.SqlServer.Management
 			{
 				foreach(DatabaseRole role in database.Roles)
 				{
+					bool memberAdded = false;
+					server.ConnectionContext.CapturedSql.Clear();
 					foreach(string member in role.EnumMembers())
 					{
 						if(database.Roles.Contains(member))
 						{
-							writer.WriteLine("sp_addrolemember N'{0}', N'{1}'", role.Name.Replace("'", "''"), member.Replace("'", "''"));
-							writer.WriteLine("GO");
+							role.AddMember(member); // call AddMember so that we can script it out
+							memberAdded = true;
 						}
+					}
+					if(memberAdded)
+					{
+						// Alter() will script out the the results of calling AddMember.
+						role.Alter();
+						StringCollection batches = server.ConnectionContext.CapturedSql.Text;
+						// Remove the first string, which is a USE statement to set the database context
+						batches.RemoveAt(0);
+						WriteBatches(writer, batches);
 					}
 				}
 			}
@@ -773,7 +808,12 @@ namespace Mercent.SqlServer.Management
 
 		private void WriteBatches(string fileName, StringCollection batches)
 		{
-			using(TextWriter writer = new StreamWriter(fileName, false, this.Encoding))
+			WriteBatches(fileName, false, batches);
+		}
+
+		private void WriteBatches(string fileName, bool append, StringCollection batches)
+		{
+			using(TextWriter writer = new StreamWriter(fileName, append, this.Encoding))
 			{
 				WriteBatches(writer, batches);
 			}
