@@ -59,6 +59,8 @@ namespace Mercent.SqlServer.Management
 			ScriptRoles();
 			ScriptSchemas();
 			ScriptSynonyms();
+			ScriptPartitionFunctions();
+			ScriptPartitionSchemes();
 			ScriptAssemblies();
 			ScriptUserDefinedDataTypes();
 			
@@ -146,7 +148,7 @@ namespace Mercent.SqlServer.Management
 			options.AppendToFile = false;
 			options.Encoding = this.Encoding;
 			options.Permissions = true;
-
+			
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
@@ -159,16 +161,23 @@ namespace Mercent.SqlServer.Management
 				if(!Directory.Exists(dir))
 					Directory.CreateDirectory(dir);
 
+				UrnCollection assemblies = new UrnCollection();
+
 				SqlSmoObject[] objects = new SqlSmoObject[1];
+				DependencyTree tree;
 				foreach(SqlAssembly assembly in database.Assemblies)
 				{
+					// It doesn't seem to script AssemblySecurityLevel unless I access it here!
+					AssemblySecurityLevel securityLevel = assembly.AssemblySecurityLevel;
+
 					string filename = Path.Combine(relativeDir, assembly.Name + ".sql");
 					options.FileName = Path.Combine(OutputDirectory, filename);
 					scripter.Options.AppendToFile = false;
 					objects[0] = assembly;
+					
 					Console.WriteLine(options.FileName);
 					scripter.ScriptWithList(objects);
-					DependencyTree tree = scripter.DiscoverDependencies(objects, DependencyType.Children);
+					tree = scripter.DiscoverDependencies(objects, DependencyType.Children);
 					// tree.FirstChild is the assembly and tree.FirstChild.FirstChild is the first dependent object
 					if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
 					{
@@ -177,13 +186,31 @@ namespace Mercent.SqlServer.Management
 						// as user defined functions, user defined types, etc.
 						for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
 						{
-							children.Add(child.Urn);
+							// Make sure the object isn't another SqlAssembly that depends on this assembly
+							// because we don't want to include the script for the other assembly in the 
+							// script for this assembly
+							if(child.Urn.Type != "SqlAssembly")
+								children.Add(child.Urn);
 						}
 						// script out the dependent objects, appending to the file
 						scripter.Options.AppendToFile = true;
 						scripter.ScriptWithList(children);
 					}
-					this.fileNames.Add(filename);
+					assemblies.Add(assembly.Urn);
+				}
+
+				// Determine proper order of assemblies based on dependencies
+				DependencyWalker walker = new DependencyWalker(server);
+				tree = walker.DiscoverDependencies(assemblies, DependencyType.Parents);
+				DependencyCollection dependencies = walker.WalkDependencies(tree);
+				foreach(DependencyCollectionNode node in dependencies)
+				{
+					// Check that the dependency is an assembly that we have scripted out
+					if(assemblies.Contains(node.Urn) && node.Urn.Type == "SqlAssembly")
+					{
+						string fileName = node.Urn.GetAttribute("Name") + ".sql";
+						this.fileNames.Add(Path.Combine(relativeDir, fileName));
+					}
 				}
 			}
 		}
@@ -565,6 +592,60 @@ namespace Mercent.SqlServer.Management
 			}
 		}
 
+		private void ScriptPartitionFunctions()
+		{
+			if(database.PartitionFunctions.Count > 0)
+			{
+				string relativeDir = "Storage";
+				string dir = Path.Combine(OutputDirectory, relativeDir);
+				if(!Directory.Exists(dir))
+					Directory.CreateDirectory(dir);
+				
+				string fileName = Path.Combine(relativeDir, "PartitionFunctions.sql");
+				ScriptingOptions options = new ScriptingOptions();
+				options.FileName = Path.Combine(OutputDirectory, fileName);
+				options.ToFileOnly = true;
+				options.Encoding = Encoding;
+				options.AllowSystemObjects = false;
+				
+				Console.WriteLine(options.FileName);
+
+				Transfer transfer = new Transfer(database);
+				transfer.Options = options;
+				transfer.CopyAllObjects = false;
+				transfer.CopyAllPartitionFunctions = true;
+				transfer.ScriptTransfer();
+				this.fileNames.Add(fileName);
+			}
+		}
+
+		private void ScriptPartitionSchemes()
+		{
+			if(database.PartitionSchemes.Count > 0)
+			{
+				string relativeDir = "Storage";
+				string dir = Path.Combine(OutputDirectory, relativeDir);
+				if(!Directory.Exists(dir))
+					Directory.CreateDirectory(dir);
+
+				string fileName = Path.Combine(relativeDir, "PartitionSchemas.sql");
+				ScriptingOptions options = new ScriptingOptions();
+				options.FileName = Path.Combine(OutputDirectory, fileName);
+				options.ToFileOnly = true;
+				options.Encoding = Encoding;
+				options.AllowSystemObjects = false;
+
+				Console.WriteLine(options.FileName);
+
+				Transfer transfer = new Transfer(database);
+				transfer.Options = options;
+				transfer.CopyAllObjects = false;
+				transfer.CopyAllPartitionSchemes = true;
+				transfer.ScriptTransfer();
+				this.fileNames.Add(fileName);
+			}
+		}
+		
 		private void ScriptRoles()
 		{
 			string fileName = "Roles.sql";

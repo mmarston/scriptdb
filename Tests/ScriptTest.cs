@@ -107,10 +107,12 @@ namespace Mercent.SqlServer.Management.Tests
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
 
-			database.PrefetchObjects(typeof(SqlAssembly), assemblyOptions);
+			// do not prefetch assemblies--it doesn't script out the AssemblySecurityLevel!
+			//database.PrefetchObjects(typeof(SqlAssembly), assemblyOptions);
 			
 			foreach(SqlAssembly assembly in database.Assemblies)
 			{
+				//AssemblySecurityLevel securityLevel = assembly.AssemblySecurityLevel;
 				string filename = Path.Combine(dir, assembly.Name + ".sql");
 				assemblyScripter.Options.AppendToFile = false;
 				assemblyScripter.Options.FileName = filename;
@@ -672,6 +674,44 @@ namespace Mercent.SqlServer.Management.Tests
 			//transfer.CopyAllUsers = true;
 			//transfer.CopyAllRoles = true;
 			//transfer.CopyAllSchemas = true;
+			transfer.ScriptTransfer();
+		}
+
+		[Test]
+		public void TestTransferPartitionFunctions()
+		{
+			Database database = server.Databases["Dev_Merchant"];
+
+			string fileName = "TransferPartitionFunctions.sql";
+			ScriptingOptions options = new ScriptingOptions();
+			options.FileName = fileName;
+			options.ToFileOnly = true;
+			options.Encoding = System.Text.Encoding.UTF8;
+			options.AllowSystemObjects = false;
+
+			Transfer transfer = new Transfer(database);
+			transfer.Options = options;
+			transfer.CopyAllObjects = false;
+			transfer.CopyAllPartitionFunctions = true;
+			transfer.ScriptTransfer();
+		}
+
+		[Test]
+		public void TestTransferPartitionSchemes()
+		{
+			Database database = server.Databases["Dev_Merchant"];
+
+			string fileName = "TransferPartitionSchemes.sql";
+			ScriptingOptions options = new ScriptingOptions();
+			options.FileName = fileName;
+			options.ToFileOnly = true;
+			options.Encoding = System.Text.Encoding.UTF8;
+			options.AllowSystemObjects = false;
+
+			Transfer transfer = new Transfer(database);
+			transfer.Options = options;
+			transfer.CopyAllObjects = false;
+			transfer.CopyAllPartitionSchemes = true;
 			transfer.ScriptTransfer();
 		}
 	}
