@@ -218,7 +218,7 @@ namespace Mercent.SqlServer.Management
 						StringCollection batches = server.ConnectionContext.CapturedSql.Text;
 						// Remove the first string, which is a USE statement to set the database context
 						batches.RemoveAt(0);
-						WriteBatches(options.FileName, true, server.ConnectionContext.CapturedSql.Text);
+						WriteBatches(options.FileName, true, batches);
 					}
 					assemblies.Add(assembly.Urn);
 				}
