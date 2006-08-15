@@ -708,10 +708,15 @@ namespace Mercent.SqlServer.Management
 					{
 						// Alter() will script out the the results of calling AddMember.
 						role.Alter();
-						StringCollection batches = server.ConnectionContext.CapturedSql.Text;
-						// Remove the first string, which is a USE statement to set the database context
-						batches.RemoveAt(0);
-						WriteBatches(writer, batches);
+						StringCollection batchesWithUse = server.ConnectionContext.CapturedSql.Text;
+						// Create a new collection without the USE statements that set the database context
+						StringCollection batchesWithoutUse = new StringCollection();
+						foreach(string batch in batchesWithUse)
+						{
+							if(!batch.StartsWith("USE "))
+								batchesWithoutUse.Add(batch);
+						}
+						WriteBatches(writer, batchesWithoutUse);
 					}
 				}
 			}
