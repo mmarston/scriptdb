@@ -69,8 +69,7 @@ namespace Mercent.SqlServer.Management
 			
 			ScriptTables();
 			// TODO: still need to test/resolve dependencies between tables/udfs
-			ScriptUserDefinedFunctions();
-			ScriptViews();
+			ScriptUserDefinedFunctionsAndViews();
 			ScriptStoredProcedures();
 
 			using(StreamWriter writer = new StreamWriter(Path.Combine(OutputDirectory, "CreateDatabaseObjects.sql"), false, Encoding))
@@ -403,7 +402,47 @@ namespace Mercent.SqlServer.Management
 			fileNames.AddRange(fkyFileNames);
 		}
 
-		private void ScriptViews()
+		private void ScriptUserDefinedFunctionsAndViews()
+		{
+			UrnCollection urns = new UrnCollection();
+
+			string functionRelativeDir = "Functions";
+			ScriptUserDefinedFunctions(functionRelativeDir, urns);
+
+			string viewRelativeDir = "Views";
+			List<string> triggerFileNames = new List<string>();
+			ScriptViews(viewRelativeDir, urns, triggerFileNames);
+
+			if (urns.Count <= 0)
+				return;
+
+			DependencyWalker walker = new DependencyWalker(server);
+			DependencyTree tree = walker.DiscoverDependencies(urns, DependencyType.Parents);
+			DependencyCollection dependencies = walker.WalkDependencies(tree);
+			foreach(DependencyCollectionNode node in dependencies)
+			{
+				// Check that the dependency is a view that we have scripted out
+				if(urns.Contains(node.Urn))
+				{
+					string filename;
+					switch(node.Urn.Type)
+					{
+						case "View":
+							filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".viw";
+							this.fileNames.Add(Path.Combine(viewRelativeDir, filename));
+							break;
+						case "UserDefinedFunction":
+							filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".udf";
+							this.fileNames.Add(Path.Combine(functionRelativeDir, filename));
+							break;
+					}
+				}
+			}
+
+			this.fileNames.AddRange(triggerFileNames);
+		}
+
+		private void ScriptViews(string relativeDir, UrnCollection urns, ICollection<string> triggerFileNames)
 		{
 			ScriptingOptions dropOptions = new ScriptingOptions();
 			dropOptions.Encoding = Encoding;
@@ -429,13 +468,9 @@ namespace Mercent.SqlServer.Management
 			triggerScripter.Options = triggerOptions;
 			triggerScripter.PrefetchObjects = false;
 
-			string relativeDir = "Views";
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if (!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
-
-			UrnCollection urns = new UrnCollection();
-			List<string> triggerFileNames = new List<string>();
 
 			ScriptingOptions prefetchOptions = new ScriptingOptions();
 			prefetchOptions.Indexes = true;
@@ -479,23 +514,6 @@ namespace Mercent.SqlServer.Management
 					}
 				}
 			}
-
-			if (urns.Count <= 0)
-				return;
-
-			DependencyWalker walker = new DependencyWalker(server);
-			DependencyTree tree = walker.DiscoverDependencies(urns, DependencyType.Parents);
-			DependencyCollection dependencies = walker.WalkDependencies(tree);
-			foreach(DependencyCollectionNode node in dependencies)
-			{
-				// Check that the dependency is a view that we have scripted out
-				if(urns.Contains(node.Urn) && node.Urn.Type == "View")
-				{
-					string filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".viw";
-					this.fileNames.Add(Path.Combine(relativeDir, filename));
-				}
-			}
-			this.fileNames.AddRange(triggerFileNames);
 		}
 
 		private void ScriptStoredProcedures()
@@ -557,7 +575,7 @@ namespace Mercent.SqlServer.Management
 			}
 		}
 
-		private void ScriptUserDefinedFunctions()
+		private void ScriptUserDefinedFunctions(string relativeDir, UrnCollection urns)
 		{
 			ScriptingOptions dropOptions = new ScriptingOptions();
 			dropOptions.Encoding = Encoding;
@@ -572,13 +590,11 @@ namespace Mercent.SqlServer.Management
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
 
-			string relativeDir = "Functions";
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if (!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
 
 			database.PrefetchObjects(typeof(UserDefinedFunction), options);
-			UrnCollection urns = new UrnCollection();
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 			foreach (UserDefinedFunction udf in database.UserDefinedFunctions)
 			{
@@ -596,22 +612,6 @@ namespace Mercent.SqlServer.Management
 						WriteBatches(writer, scripter.ScriptWithList(objects));
 					}
 					urns.Add(udf.Urn);
-				}
-			}
-
-			if (urns.Count <= 0)
-				return;
-
-			DependencyWalker walker = new DependencyWalker(server);
-			DependencyTree tree = walker.DiscoverDependencies(urns, DependencyType.Parents);
-			DependencyCollection dependencies = walker.WalkDependencies(tree);
-			foreach(DependencyCollectionNode node in dependencies)
-			{
-				// Check that the dependency is a udf that we have scripted out
-				if(urns.Contains(node.Urn) && node.Urn.Type == "UserDefinedFunction")
-				{
-					string filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".udf";
-					this.fileNames.Add(Path.Combine(relativeDir, filename));
 				}
 			}
 		}
