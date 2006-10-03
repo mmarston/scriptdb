@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Data.SqlClient;
 using System.IO;
 using System.Text;
+using System.Xml;
 
 using Microsoft.SqlServer.Management.Smo;
+using Microsoft.SqlServer.Management.Smo.Broker;
 using Microsoft.SqlServer.Management.Common;
 
 namespace Mercent.SqlServer.Management
@@ -61,6 +64,9 @@ namespace Mercent.SqlServer.Management
 			ScriptDatabase();
 			ScriptRoles();
 			ScriptSchemas();
+			ScriptXmlSchemaCollections();
+			ScriptServiceBrokerMessageTypes();
+			ScriptServiceBrokerContracts();
 			ScriptSynonyms();
 			ScriptPartitionFunctions();
 			ScriptPartitionSchemes();
@@ -71,6 +77,9 @@ namespace Mercent.SqlServer.Management
 			// TODO: still need to test/resolve dependencies between tables/udfs
 			ScriptUserDefinedFunctionsAndViews();
 			ScriptStoredProcedures();
+			ScriptServiceBrokerQueues();
+			ScriptServiceBrokerServices();
+
 
 			using(StreamWriter writer = new StreamWriter(Path.Combine(OutputDirectory, "CreateDatabaseObjects.sql"), false, Encoding))
 			{
@@ -107,7 +116,6 @@ namespace Mercent.SqlServer.Management
 			//database.Synonyms;
 			//database.Triggers;
 			//database.Users;
-			//database.XmlSchemaCollections;
 
 			fileNames.Add("CreateDatabaseObjects.sql");
 
@@ -186,10 +194,11 @@ namespace Mercent.SqlServer.Management
 					if(assembly.IsVisible)
 					{
 						tree = scripter.DiscoverDependencies(objects, DependencyType.Children);
+						
 						// tree.FirstChild is the assembly and tree.FirstChild.FirstChild is the first dependent object
 						if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
 						{
-							UrnCollection children = new UrnCollection();
+							IDictionary<string, Urn> sortedChildren = new SortedDictionary<string, Urn>(StringComparer.InvariantCultureIgnoreCase);
 							// loop through the children, which should be the SQL CLR objects such
 							// as user defined functions, user defined types, etc.
 							for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
@@ -198,10 +207,12 @@ namespace Mercent.SqlServer.Management
 								// because we don't want to include the script for the other assembly in the 
 								// script for this assembly
 								if(child.Urn.Type != "SqlAssembly")
-									children.Add(child.Urn);
+									sortedChildren.Add(child.Urn.Value, child.Urn);
 							}
 							// script out the dependent objects, appending to the file
 							scripter.Options.AppendToFile = true;
+							Urn[] children = new Urn[sortedChildren.Count];
+							sortedChildren.Values.CopyTo(children, 0);
 							scripter.ScriptWithList(children);
 						}
 					}
@@ -516,6 +527,152 @@ namespace Mercent.SqlServer.Management
 			}
 		}
 
+		private void ScriptServiceBrokerMessageTypes()
+		{
+			UrnCollection urns = new UrnCollection();
+			foreach(MessageType messageType in database.ServiceBroker.MessageTypes)
+			{
+				// this is a hack to only get user defined message types, not built in ones
+				if(messageType.ID >= 65536)
+				{
+					urns.Add(messageType.Urn);
+				}
+			}
+
+			if(urns.Count == 0)
+				return;
+
+			string relativeDir = @"Service Broker";
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			string fileName = Path.Combine(relativeDir, "Message Types.sql");
+			Console.WriteLine(fileName);
+			ScriptingOptions options = new ScriptingOptions();
+			options.FileName = Path.Combine(OutputDirectory, fileName);
+			options.ToFileOnly = true;
+			options.Encoding = this.Encoding;
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			scripter.ScriptWithList(urns);
+			this.fileNames.Add(fileName);
+		}
+
+		private void ScriptServiceBrokerContracts()
+		{
+			UrnCollection urns = new UrnCollection();
+			foreach(ServiceContract contract in database.ServiceBroker.ServiceContracts)
+			{
+				// this is a hack to only get user defined contracts, not built in ones
+				if(contract.ID >= 65536)
+				{
+					urns.Add(contract.Urn);
+				}
+			}
+
+			if(urns.Count == 0)
+				return;
+
+			string relativeDir = @"Service Broker";
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			string fileName = Path.Combine(relativeDir, "Contracts.sql");
+			Console.WriteLine(fileName);
+			ScriptingOptions options = new ScriptingOptions();
+			options.FileName = Path.Combine(OutputDirectory, fileName);
+			options.ToFileOnly = true;
+			options.Encoding = this.Encoding;
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			scripter.ScriptWithList(urns);
+			this.fileNames.Add(fileName);
+		}
+
+		private void ScriptServiceBrokerQueues()
+		{
+			// Get a list of IDs for Queues that are not system queues
+			List<int> nonSystemQueueIds = new List<int>();
+			server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.ExecuteSql;
+			string sqlCommand = String.Format("select object_id from {0}.sys.service_queues WHERE is_ms_shipped = 0 ORDER BY object_id", MakeSqlBracket(database.Name));
+			using(SqlDataReader reader = server.ConnectionContext.ExecuteReader(sqlCommand))
+			{
+				while(reader.Read())
+				{
+					nonSystemQueueIds.Add(reader.GetInt32(0));
+				}
+			}
+
+			// After using the ConnectionContext to execute the reader above
+			// we have to change the connection back to using the correct database.
+			// This appears to be an issue/bug with SQL SMO.
+			sqlCommand = String.Format("USE {0}", MakeSqlBracket(database.Name));
+			server.ConnectionContext.ExecuteNonQuery(sqlCommand);
+
+			if(nonSystemQueueIds.Count == 0)
+				return;
+
+			UrnCollection urns = new UrnCollection();
+			foreach(ServiceQueue queue in database.ServiceBroker.Queues)
+			{
+				// Check if the ID was found in the list of nonSystemQueueIds
+				if(nonSystemQueueIds.BinarySearch(queue.ID) >= 0)
+				{
+					urns.Add(queue.Urn);
+				}
+			}
+
+			string relativeDir = @"Service Broker";
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			string fileName = Path.Combine(relativeDir, "Queues.sql");
+			Console.WriteLine(fileName);
+			ScriptingOptions options = new ScriptingOptions();
+			options.FileName = Path.Combine(OutputDirectory, fileName);
+			options.ToFileOnly = true;
+			options.Encoding = this.Encoding;
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			scripter.ScriptWithList(urns);
+			this.fileNames.Add(fileName);
+		}
+
+		private void ScriptServiceBrokerServices()
+		{
+			UrnCollection urns = new UrnCollection();
+			foreach(BrokerService service in database.ServiceBroker.Services)
+			{
+				// this is a hack to only get user defined contracts, not built in ones
+				if(service.ID >= 65536)
+				{
+					urns.Add(service.Urn);
+				}
+			}
+
+			if(urns.Count == 0)
+				return;
+
+			string relativeDir = @"Service Broker";
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			string fileName = Path.Combine(relativeDir, "Services.sql");
+			Console.WriteLine(fileName);
+			ScriptingOptions options = new ScriptingOptions();
+			options.FileName = Path.Combine(OutputDirectory, fileName);
+			options.ToFileOnly = true;
+			options.Encoding = this.Encoding;
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			scripter.ScriptWithList(urns);
+			this.fileNames.Add(fileName);
+		}
+
 		private void ScriptStoredProcedures()
 		{
 			ScriptingOptions dropOptions = new ScriptingOptions();
@@ -791,6 +948,87 @@ namespace Mercent.SqlServer.Management
 				transfer.ScriptTransfer();
 				this.fileNames.Add(fileName);
 			}
+		}
+
+		private void ScriptXmlSchemaCollections()
+		{
+			List<XmlSchemaCollection> xmlSchemaCollections = new List<XmlSchemaCollection>();
+			foreach(XmlSchemaCollection xmlSchemaCollection in database.XmlSchemaCollections)
+			{
+				// this is a hack to only get user defined xml schema collections, not built in ones
+				if(xmlSchemaCollection.ID >= 65536)
+				{
+					xmlSchemaCollections.Add(xmlSchemaCollection);
+				}
+			}
+
+			if(xmlSchemaCollections.Count == 0)
+				return;
+
+			string relativeDir = "Xml Schema Collections";
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			database.PrefetchObjects(typeof(XmlSchemaCollection));
+
+			StringBuilder sb = new StringBuilder();
+
+			XmlWriterSettings writerSettings = new XmlWriterSettings();
+			writerSettings.ConformanceLevel = ConformanceLevel.Fragment;
+			writerSettings.NewLineOnAttributes = true;
+			writerSettings.Encoding = this.Encoding;
+			writerSettings.Indent = true;
+			writerSettings.IndentChars = "\t";
+
+			XmlReaderSettings readerSettings = new XmlReaderSettings();
+			readerSettings.ConformanceLevel = ConformanceLevel.Fragment;
+
+			foreach(XmlSchemaCollection xmlSchemaCollection in xmlSchemaCollections)
+			{
+				// this is a hack to only get user defined xml schema collections, not built in ones
+				if(xmlSchemaCollection.ID >= 65536)
+				{
+					string fileName = Path.Combine(relativeDir, xmlSchemaCollection.Schema + "." + xmlSchemaCollection.Name + ".sql");
+					Console.WriteLine(fileName);
+					using(TextReader textReader = new StringReader(xmlSchemaCollection.Text))
+					{
+						using(XmlReader xmlReader = XmlReader.Create(textReader, readerSettings))
+						{
+							sb.Length = 0;
+							using(StringWriter stringWriter = new StringWriter(sb))
+							{
+								using(XmlWriter xmlWriter = XmlWriter.Create(stringWriter, writerSettings))
+								{
+									while(xmlReader.Read())
+									{
+										xmlWriter.WriteNode(xmlReader, false);
+									}
+								}
+							}
+						}
+					}
+					sb.Replace("'", "''");
+					using(TextWriter writer = new StreamWriter(Path.Combine(OutputDirectory, fileName), false, this.Encoding))
+					{
+						writer.WriteLine("CREATE XML SCHEMA COLLECTION {0}.{1} AS N'", MakeSqlBracket(xmlSchemaCollection.Schema), MakeSqlBracket(xmlSchemaCollection.Name));
+						writer.WriteLine(sb.ToString());
+						writer.WriteLine("'");
+						writer.WriteLine("GO");
+					}
+					this.fileNames.Add(fileName);
+				}
+			}
+		}
+
+		public static string MakeSqlBracket(string name)
+		{
+			return "[" + EscapeChar(name, ']') + "]";
+		}
+
+		public static string EscapeChar(string s, char c)
+		{
+			return s.Replace(new string(c, 1), new string(c, 2));
 		}
 
 		/// <summary>

@@ -2,10 +2,16 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Data;
+using System.Data.SqlClient;
+using System.Data.SqlTypes;
+using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Xml;
 
 using Microsoft.SqlServer.Management.Smo;
+using Microsoft.SqlServer.Management.Smo.Broker;
 using Microsoft.SqlServer.Management.Common;
 using NUnit.Framework;
 
@@ -396,6 +402,270 @@ namespace Mercent.SqlServer.Management.Tests
 		}
 
 		[Test]
+		public void TestTransferDependencies()
+		{
+			//Database database = server.Databases["Merchant_Prod_Limoges"];
+			Database database = server.Databases["Product_Merchant"];
+			Transfer transfer = new Transfer(database);
+			transfer.Options.WithDependencies = true;
+			transfer.CopyAllObjects = false;
+			transfer.CopyAllViews = true;
+			transfer.CopyAllUserDefinedFunctions = true;
+			UrnCollection urns = transfer.EnumObjects();
+			foreach(Urn urn in urns)
+			{
+				if(urn.Type == "UserDefinedFunction" || urn.Type == "View")
+					Console.WriteLine("{0} ({1})", urn.GetNameForType(urn.Type), urn.Type);
+			}
+		}
+
+		[Test]
+		public void TestTransferDependencies2()
+		{
+			Database database = server.Databases["Product_Merchant"];
+
+			ArrayList objects = new ArrayList();
+			database.PrefetchObjects(typeof(UserDefinedFunction));
+			foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
+			{
+				if(!udf.IsSystemObject)
+				{
+					objects.Add(udf);
+				}
+			}
+			database.PrefetchObjects(typeof(View));
+			foreach(View view in database.Views)
+			{
+				if(!view.IsSystemObject)
+				{
+					objects.Add(view);
+				}
+			}
+
+			//Database database = server.Databases["Merchant_Prod_Limoges"];
+			Transfer transfer = new Transfer(database);
+			transfer.Options.WithDependencies = true;
+			transfer.CopyAllObjects = false;
+			transfer.ObjectList = objects;
+
+			UrnCollection urns = transfer.EnumObjects();
+			foreach(Urn urn in urns)
+			{
+				if(urn.Type == "UserDefinedFunction" || urn.Type == "View")
+					Console.WriteLine("{0} ({1})", urn.GetNameForType(urn.Type), urn.Type);
+			}
+		}
+
+		[Test]
+		public void TestDiscoverDependencies()
+		{
+			Database database = server.Databases["Product_Merchant"];
+
+			UrnCollection urns = new UrnCollection();
+			database.PrefetchObjects(typeof(UserDefinedFunction));
+			foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
+			{
+				if(!udf.IsSystemObject)
+				{
+					urns.Insert(0, udf.Urn);
+				}
+			}
+			database.PrefetchObjects(typeof(View));
+			foreach(View view in database.Views)
+			{
+				if(!view.IsSystemObject)
+				{
+					urns.Insert(0, view.Urn);
+				}
+			}
+			
+
+			DependencyWalker walker = new DependencyWalker(server);
+			DependencyTree tree = walker.DiscoverDependencies(urns, DependencyType.Children);
+			DependencyCollection dependencies = walker.WalkDependencies(tree);
+			for(int i = dependencies.Count - 1; i >= 0; i--)
+			{
+				Urn urn = dependencies[i].Urn;
+				if(urn.Type == "UserDefinedFunction" || urn.Type == "View")
+					Console.WriteLine("{0} ({1})", urn.GetNameForType(urn.Type), urn.Type);
+			}
+		}
+
+		[Test]
+		public void TestXmlSchemaCollections()
+		{
+			Database database = server.Databases["Merchant_Prod_Limoges"];
+
+			if(!Directory.Exists("XmlSchemaCollections"))
+				Directory.CreateDirectory("XmlSchemaCollections");
+			
+			database.PrefetchObjects(typeof(XmlSchemaCollection));
+
+			StringBuilder sb = new StringBuilder();
+
+			XmlWriterSettings writerSettings = new XmlWriterSettings();
+			writerSettings.ConformanceLevel = ConformanceLevel.Fragment;
+			writerSettings.NewLineOnAttributes = true;
+			writerSettings.Encoding = Encoding.UTF8;
+			writerSettings.Indent = true;
+			writerSettings.IndentChars = "\t";
+
+			XmlReaderSettings readerSettings = new XmlReaderSettings();
+			readerSettings.ConformanceLevel = ConformanceLevel.Fragment;
+						
+			foreach(XmlSchemaCollection xmlSchemaCollection in database.XmlSchemaCollections)
+			{
+				using(TextReader textReader = new StringReader(xmlSchemaCollection.Text))
+				{
+					using(XmlReader xmlReader = XmlReader.Create(textReader, readerSettings))
+					{
+						sb.Length = 0;
+						using(StringWriter stringWriter = new StringWriter(sb))
+						{
+							using(XmlWriter xmlWriter = XmlWriter.Create(stringWriter, writerSettings))
+							{
+								while(xmlReader.Read())
+								{
+									xmlWriter.WriteNode(xmlReader, false);
+								}
+							}
+						}
+					}
+				}
+				sb.Replace("'", "''");
+				string sqlFilename = Path.Combine("XmlSchemaCollections", xmlSchemaCollection.Schema + "." + xmlSchemaCollection.Name + ".sql");
+				using(TextWriter writer = new StreamWriter(sqlFilename, false, Encoding.UTF8))
+				{
+					writer.WriteLine("CREATE XML SCHEMA COLLECTION {0}.{1} AS N'", MakeSqlBracket(xmlSchemaCollection.Schema), MakeSqlBracket(xmlSchemaCollection.Name));
+					writer.WriteLine(sb.ToString());
+					writer.WriteLine("'");
+					writer.WriteLine("GO");
+				}
+			}
+		}
+
+		[Test]
+		public void TestServiceBrokerMessageTypes()
+		{
+			Database database = server.Databases["Merchant_Prod_Limoges"];
+			
+			if(!Directory.Exists("ServiceBroker"))
+				Directory.CreateDirectory("ServiceBroker");
+
+			UrnCollection urns = new UrnCollection();
+			foreach(MessageType messageType in database.ServiceBroker.MessageTypes)
+			{
+				// this is a hack to only get user defined message types, not built in ones
+				if(messageType.ID >= 65536)
+				{
+					urns.Add(messageType.Urn);
+				}
+			}
+			
+			ScriptingOptions options = new ScriptingOptions();
+			options.ToFileOnly = true;
+			options.Encoding = System.Text.Encoding.UTF8;
+			options.FileName = @"ServiceBroker\MessageTypes.sql";
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			
+			scripter.ScriptWithList(urns);
+		}
+
+		[Test]
+		public void TestServiceBrokerContracts()
+		{
+			Database database = server.Databases["Merchant_Prod_Limoges"];
+
+			if(!Directory.Exists("ServiceBroker"))
+				Directory.CreateDirectory("ServiceBroker");
+			
+			UrnCollection urns = new UrnCollection();
+			foreach(ServiceContract contract in database.ServiceBroker.ServiceContracts)
+			{
+				// this is a hack to only get user defined contracts, not built in ones
+				if(contract.ID >= 65536)
+				{
+					urns.Add(contract.Urn);
+				}
+			}
+
+			ScriptingOptions options = new ScriptingOptions();
+			options.ToFileOnly = true;
+			options.Encoding = System.Text.Encoding.UTF8;
+			options.FileName = @"ServiceBroker\Contracts.sql";
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			
+			scripter.ScriptWithList(urns);
+		}
+
+		[Test]
+		public void TestServiceBrokerQueues()
+		{
+			Database database = server.Databases["Merchant_Prod_Limoges"];
+
+			if(!Directory.Exists("ServiceBroker"))
+				Directory.CreateDirectory("ServiceBroker");
+
+			List<int> systemQueueIds = new List<int>();
+			string sqlCommand = String.Format("select object_id from {0}.sys.service_queues WHERE is_ms_shipped = 1 ORDER BY object_id", MakeSqlBracket(database.Name));
+			using(SqlDataReader reader = server.ConnectionContext.ExecuteReader(sqlCommand))
+			{
+				while(reader.Read())
+				{
+					systemQueueIds.Add(reader.GetInt32(0));
+				}
+			}
+			sqlCommand = String.Format("USE {0}", MakeSqlBracket(database.Name));
+			server.ConnectionContext.ExecuteNonQuery(sqlCommand);
+			UrnCollection urns = new UrnCollection();
+			foreach(ServiceQueue queue in database.ServiceBroker.Queues)
+			{
+				if(systemQueueIds.BinarySearch(queue.ID) < 0)
+				{
+					urns.Add(queue.Urn);
+				}
+			}
+
+			ScriptingOptions options = new ScriptingOptions();
+			options.ToFileOnly = true;
+			options.Encoding = System.Text.Encoding.UTF8;
+			options.FileName = @"ServiceBroker\Queues.sql";
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+
+			scripter.ScriptWithList(urns);
+		}
+
+		[Test]
+		public void TestServiceBrokerServices()
+		{
+			Database database = server.Databases["Merchant_Prod_Limoges"];
+
+			if(!Directory.Exists("ServiceBroker"))
+				Directory.CreateDirectory("ServiceBroker");
+
+			UrnCollection urns = new UrnCollection();
+			foreach(BrokerService service in database.ServiceBroker.Services)
+			{
+				if(service.ID >= 65536)
+				{
+					urns.Add(service.Urn);
+				}
+			}
+
+			ScriptingOptions options = new ScriptingOptions();
+			options.ToFileOnly = true;
+			options.Encoding = System.Text.Encoding.UTF8;
+			options.FileName = @"ServiceBroker\Services.sql";
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+
+			scripter.ScriptWithList(urns);
+		}
+
+		[Test]
 		public void TestStoredProcedures()
 		{
 			Database database = server.Databases["Product_Datawarehouse"];
@@ -743,5 +1013,293 @@ namespace Mercent.SqlServer.Management.Tests
 			transfer.CopyAllPartitionSchemes = true;
 			transfer.ScriptTransfer();
 		}
+
+		public static string MakeSqlBracket(string name)
+		{
+			return "[" + EscapeChar(name, ']') + "]";
+		}
+
+		public static string EscapeChar(string s, char c)
+		{
+			return s.Replace(new string(c, 1), new string(c, 2));
+		}
+
+		public static string ByteArrayToHexLiteral(byte[] a)
+		{
+			if(a == null)
+			{
+				return null;
+			}
+			StringBuilder builder = new StringBuilder(a.Length * 2);
+			builder.Append("0x");
+			foreach(byte b in a)
+			{
+				builder.Append(b.ToString("X02", System.Globalization.CultureInfo.InvariantCulture));
+			}
+			return builder.ToString();
+		}
+
+		private string GetOrderByClauseForTable(Table table)
+		{
+			Index bestIndex = null;
+			int bestRank = int.MaxValue;
+			// Find the best index to use for the order by clause.
+			// In order of priority we want to use:
+			// 1) the primary key,
+			// 2) the clustered index,
+			// 3) a unique key,
+			// or 4) a unique index
+			// There could be multiple of unique keys/indexes so we go with
+			// the one that comes first alphabetically. 
+			foreach(Index index in table.Indexes)
+			{
+				int currentRank = int.MaxValue;
+				if(index.IndexKeyType == IndexKeyType.DriPrimaryKey)
+					currentRank = 1;
+				else if(index.IsClustered)
+					currentRank = 2;
+				else if(index.IndexKeyType == IndexKeyType.DriUniqueKey)
+					currentRank = 3;
+				else if(index.IsUnique)
+					currentRank = 4;
+				else if(!index.IsXmlIndex)
+					currentRank = 5;
+				if(currentRank < bestRank ||
+					(
+						currentRank == bestRank
+						&& String.Compare(index.Name, bestIndex.Name, false, CultureInfo.InvariantCulture) < 0
+					)
+				)
+				{
+					bestRank = currentRank;
+					bestIndex = index;
+				}
+			}
+
+			StringBuilder orderBy = new StringBuilder();
+			orderBy.Append("ORDER BY ");
+
+			if(bestIndex == null)
+			{
+				// If we didn't find an index then we sort by all non-computed columns
+				bool isFirstColumn = true;
+				foreach(Column column in table.Columns)
+				{
+					if(!column.Computed)
+					{
+						if(!isFirstColumn)
+							orderBy.Append(", ");
+						else
+							isFirstColumn = false;
+						orderBy.Append(MakeSqlBracket(column.Name));
+					}
+				}
+			}
+			else
+			{
+				bool isFirstIndexColumn = true;
+				foreach(IndexedColumn indexColumn in bestIndex.IndexedColumns)
+				{
+					if(!indexColumn.IsIncluded)
+					{
+						if(!isFirstIndexColumn)
+							orderBy.Append(", ");
+						else
+							isFirstIndexColumn = false;
+						orderBy.Append(MakeSqlBracket(indexColumn.Name));
+						if(indexColumn.Descending)
+							orderBy.Append(" DESC");
+					}
+				}
+				// If the index isn't unique then add all the rest of the non-computed columns
+				if(!bestIndex.IsUnique)
+				{
+					foreach(Column column in table.Columns)
+					{
+						if(!column.Computed
+							&& bestIndex.IndexedColumns.Contains(column.Name)
+							&& !bestIndex.IndexedColumns[column.Name].IsIncluded)
+						{
+							orderBy.Append(MakeSqlBracket(column.Name));
+						}
+					}
+				}
+			}
+			return orderBy.ToString();
+		}
+
+
+		[Test]
+		public void TestScriptDataAsInsert()
+		{
+			Database database = server.Databases["Dev_Merchant"];
+			Table table = database.Tables["AllType"];
+
+			bool hasIdentityColumn = false;
+			StringBuilder columnListBuilder = new StringBuilder();
+			bool isFirstColumn = true;
+			int columnCount = 1;
+			foreach(Column column in table.Columns)
+			{
+				if(!column.Computed && column.DataType.SqlDataType != SqlDataType.Timestamp)
+				{
+					if(isFirstColumn)
+						isFirstColumn = false;
+					else
+						columnListBuilder.AppendLine(",");
+					columnListBuilder.Append('\t', columnCount++);
+					columnListBuilder.Append(MakeSqlBracket(column.Name));
+					if(column.Identity)
+						hasIdentityColumn = true;
+				}
+			}
+
+			string tableNameWithSchema = String.Format("{0}.{1}", MakeSqlBracket(table.Schema), MakeSqlBracket(table.Name));
+			string tableNameWithDatabase = String.Format("{0}.{1}", MakeSqlBracket(database.Name), tableNameWithSchema);
+			string columnList = columnListBuilder.ToString();
+			string selectClause = String.Format("SELECT\r\n{0}", columnList);
+			string fromClause = String.Format("FROM {0}", tableNameWithDatabase);
+			string orderByClause = GetOrderByClauseForTable(table);
+			string selectCommand = String.Format("{0}\r\n{1}\r\n{2}", selectClause, fromClause, orderByClause);
+			
+			SqlDataReader reader = server.ConnectionContext.ExecuteReader(selectCommand);
+			object[] values = new object[reader.FieldCount];
+			using(TextWriter writer = new StreamWriter(table.Name + "_insert.sql"))
+			{
+				if(hasIdentityColumn)
+					writer.WriteLine("SET IDENTITY_INSERT {0} ON", tableNameWithSchema);
+				int rowCount = 0;
+				int batchSize = 4;
+				while(reader.Read())
+				{
+					if(rowCount % batchSize == 0)
+					{
+						writer.WriteLine("INSERT {0}\r\n(\r\n{1}\r\n)\r\nSELECT", tableNameWithDatabase, columnList);
+					}
+					else
+					{
+						writer.WriteLine("UNION ALL SELECT");
+					}
+					reader.GetSqlValues(values);
+					bool isFirstValue = true;
+					columnCount = 1;
+					foreach(object val in values)
+					{
+						if(!isFirstValue)
+							writer.WriteLine(",");
+						else
+							isFirstValue = false;
+						writer.Write(new string('\t', columnCount++));
+
+						if(DBNull.Value == val || (val is INullable && ((INullable)val).IsNull))
+							writer.Write("NULL");
+						else if(val is System.Data.SqlTypes.SqlBinary)
+						{
+							writer.Write(ByteArrayToHexLiteral(((SqlBinary)val).Value));
+						}
+						else if(val is System.Data.SqlTypes.SqlBoolean)
+						{
+							writer.Write(((SqlBoolean)val).Value ? '1' : '0');
+						}
+						else if(val is System.Data.SqlTypes.SqlBytes)
+						{
+							writer.Write(ByteArrayToHexLiteral(((SqlBytes)val).Value));
+						}
+						else if(val is System.Data.SqlTypes.SqlChars)
+						{
+							writer.Write("'{0}'", new string(((SqlChars)val).Value));
+						}
+						else if(val is System.Data.SqlTypes.SqlDateTime)
+						{
+							writer.Write("'{0}'", ((SqlDateTime)val).Value.ToString("yyyy-MM-ddTHH:mm:ss.fff"));
+						}
+						else if(val is System.Data.SqlTypes.SqlDecimal
+							|| val is System.Data.SqlTypes.SqlByte
+							|| val is System.Data.SqlTypes.SqlInt16
+							|| val is System.Data.SqlTypes.SqlInt32
+							|| val is System.Data.SqlTypes.SqlInt64
+							|| val is System.Data.SqlTypes.SqlMoney)
+						{
+							writer.Write(val.ToString());
+						}
+						else if(val is System.Data.SqlTypes.SqlSingle)
+						{
+							writer.Write(((SqlSingle)val).Value.ToString("r"));
+						}
+						else if(val is System.Data.SqlTypes.SqlDouble)
+						{
+							writer.Write(((SqlDouble)val).Value.ToString("r"));
+						}
+						else if(val is System.Data.SqlTypes.SqlGuid
+							|| val is System.Data.SqlTypes.SqlString)
+						{
+							writer.Write("'{0}'", val.ToString());
+						}
+						else if(val is System.Data.SqlTypes.SqlXml)
+						{
+							writer.Write("'{0}'", ((SqlXml)val).Value);
+						}
+						else
+						{
+							throw new ApplicationException("A column was returned as an unsupported type (" + val.GetType().ToString());
+						}
+					}
+					writer.WriteLine();
+					rowCount++;
+				}
+				if(hasIdentityColumn)
+					writer.WriteLine("SET IDENTITY_INSERT {0} OFF", tableNameWithSchema);
+			}
+		}
+		[Test]
+		public void TestCopyTable()
+		{
+			Database database = server.Databases["Dev_Merchant"];
+
+			database.PrefetchObjects(typeof(Table)); 
+			Table productTable = database.Tables["Product"];
+			Table editedProductTable = database.Tables["EditedProduct"];
+			if(editedProductTable == null)
+				editedProductTable = new Table(database, "EditedProduct");
+
+			
+			int columnIndex = 0;
+			string previousColumnName = null;
+			foreach(Column column in productTable.Columns)
+			{
+				Column editedColumn = editedProductTable.Columns[column.Name];
+				if(editedColumn == null)
+				{
+					editedProductTable.Columns.Add(new Column(editedProductTable, column.Name, column.DataType), previousColumnName);
+				}
+				else if(!(editedColumn.DataType.Name == column.DataType.Name))
+				{
+					editedColumn.DataType = column.DataType;
+				}
+				columnIndex++;
+				previousColumnName = column.Name;
+			}
+			
+			
+
+			// remove extra columns
+			while(columnIndex < editedProductTable.Columns.Count)
+			{
+				editedProductTable.Columns.Remove(editedProductTable.Columns[columnIndex]);
+			}
+
+			switch(editedProductTable.State)
+			{
+				case SqlSmoState.Creating:
+					editedProductTable.Create();
+					break;
+				case SqlSmoState.Pending:
+				case SqlSmoState.Existing:
+					editedProductTable.Alter();
+					break;
+			}
+		}
+
+		
 	}
 }
