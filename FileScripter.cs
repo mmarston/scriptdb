@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Data.SqlClient;
+using System.Data.SqlTypes;
 using System.IO;
 using System.Text;
 using System.Xml;
@@ -72,9 +73,12 @@ namespace Mercent.SqlServer.Management
 			ScriptPartitionSchemes();
 			ScriptAssemblies();
 			ScriptUserDefinedDataTypes();
+			ScriptUserDefinedFunctionHeaders();
+			//ScriptViewHeaders();
 			
 			ScriptTables();
 			// TODO: still need to test/resolve dependencies between tables/udfs
+			//ScriptViews();
 			ScriptUserDefinedFunctionsAndViews();
 			ScriptStoredProcedures();
 			ScriptServiceBrokerQueues();
@@ -111,7 +115,6 @@ namespace Mercent.SqlServer.Management
 			//database.PartitionFunctions;
 			//database.PartitionSchemes;
 			//database.Rules;
-			//database.ServiceBroker;
 			//database.SymmetricKeys;
 			//database.Synonyms;
 			//database.Triggers;
@@ -207,7 +210,61 @@ namespace Mercent.SqlServer.Management
 								// because we don't want to include the script for the other assembly in the 
 								// script for this assembly
 								if(child.Urn.Type != "SqlAssembly")
+								{
 									sortedChildren.Add(child.Urn.Value, child.Urn);
+									object sqlSmoObject = null;
+									switch(child.Urn.Type)
+									{
+										case "StoredProcedure":
+											{
+												StoredProcedure procedure = database.StoredProcedures[child.Urn.GetAttribute("Name"), child.Urn.GetAttribute("Schema")];
+												string sqlCommand = String.Format("SELECT parameter_id, default_value FROM {0}.sys.parameters WHERE [object_id] = {1} AND has_default_value = 1",
+												MakeSqlBracket(database.Name), procedure.ID);
+												object[] defaults = new object[procedure.Parameters.Count];
+												server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.ExecuteSql;
+												using(SqlDataReader reader = server.ConnectionContext.ExecuteReader(sqlCommand))
+												{
+													while(reader.Read())
+													{
+														defaults[reader.GetInt32(0) - 1] = reader.GetSqlValue(1);
+													}
+												}
+												server.ConnectionContext.ExecuteNonQuery("USE " + MakeSqlBracket(database.Name));
+												for(int i = 0; i < defaults.Length; i++)
+												{
+													if(defaults[i] != null)
+													{
+														procedure.Parameters[i].DefaultValue = GetSqlLiteral(defaults[i]);
+													}
+												}
+											}
+											break;
+										case "UserDefinedFunction":
+											{
+												UserDefinedFunction function = database.UserDefinedFunctions[child.Urn.GetAttribute("Name"), child.Urn.GetAttribute("Schema")];
+												string sqlCommand = String.Format("SELECT parameter_id, default_value FROM {0}.sys.parameters WHERE [object_id] = {1} AND has_default_value = 1",
+												MakeSqlBracket(database.Name), function.ID);
+												object[] defaults = new object[function.Parameters.Count];
+												server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.ExecuteSql;
+												using(SqlDataReader reader = server.ConnectionContext.ExecuteReader(sqlCommand))
+												{
+													while(reader.Read())
+													{
+														defaults[reader.GetInt32(0) - 1] = reader.GetSqlValue(1);
+													}
+												}
+												server.ConnectionContext.ExecuteNonQuery("USE " + MakeSqlBracket(database.Name));
+												for(int i = 0; i < defaults.Length; i++)
+												{
+													if(defaults[i] != null)
+													{
+														function.Parameters[i].DefaultValue = GetSqlLiteral(defaults[i]);
+													}
+												}
+											}
+											break;
+									}
+								}
 							}
 							// script out the dependent objects, appending to the file
 							scripter.Options.AppendToFile = true;
@@ -417,9 +474,6 @@ namespace Mercent.SqlServer.Management
 		{
 			UrnCollection urns = new UrnCollection();
 
-			string functionRelativeDir = "Functions";
-			ScriptUserDefinedFunctions(functionRelativeDir, urns);
-
 			string viewRelativeDir = "Views";
 			List<string> triggerFileNames = new List<string>();
 			ScriptViews(viewRelativeDir, urns, triggerFileNames);
@@ -436,21 +490,13 @@ namespace Mercent.SqlServer.Management
 				if(urns.Contains(node.Urn))
 				{
 					string filename;
-					switch(node.Urn.Type)
-					{
-						case "View":
-							filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".viw";
-							this.fileNames.Add(Path.Combine(viewRelativeDir, filename));
-							break;
-						case "UserDefinedFunction":
-							filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".udf";
-							this.fileNames.Add(Path.Combine(functionRelativeDir, filename));
-							break;
-					}
+					filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".viw";
+					this.fileNames.Add(Path.Combine(viewRelativeDir, filename));
 				}
 			}
 
 			this.fileNames.AddRange(triggerFileNames);
+			ScriptUserDefinedFunctions();
 		}
 
 		private void ScriptViews(string relativeDir, UrnCollection urns, ICollection<string> triggerFileNames)
@@ -523,6 +569,132 @@ namespace Mercent.SqlServer.Management
 						}
 						triggerFileNames.Add(filename);
 					}
+				}
+			}
+		}
+
+		private void ScriptViewHeaders()
+		{
+			database.PrefetchObjects(typeof(View));
+			IList<View> views = new List<View>();
+			foreach(View view in database.Views)
+			{
+				if(!view.IsSystemObject)
+					views.Add(view);
+			}
+
+			if(views.Count == 0)
+				return;
+
+			string relativeDir = "Views";
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			string fileName = Path.Combine(relativeDir, "Views.sql");
+			string outputFileName = Path.Combine(OutputDirectory, fileName);
+			Console.WriteLine(outputFileName);
+			using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+			{
+				foreach(View view in views)
+				{
+					writer.WriteLine(view.TextHeader.Trim());
+					writer.Write("SELECT\r\n\t");
+					string delimiter = null;
+					foreach(Column column in view.Columns)
+					{
+						if(delimiter == null)
+							delimiter = ",\r\n\t";
+						else
+							writer.Write(delimiter);
+						string dataTypeAsString = GetDataTypeAsString(column.DataType);
+						if(String.IsNullOrEmpty(column.Collation))
+							writer.Write("CAST(NULL AS {0}) AS {1}", dataTypeAsString, column.Name);
+						else
+							writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, column.Name);
+					}
+
+					writer.WriteLine("GO");
+				}
+			}
+			this.fileNames.Add(fileName);
+		}
+
+		private void ScriptViews()
+		{
+			database.PrefetchObjects(typeof(View));
+			IList<View> views = new List<View>();
+			foreach(View view in database.Views)
+			{
+				if(!view.IsSystemObject)
+					views.Add(view);
+			}
+
+			if(views.Count == 0)
+				return;
+
+			string relativeDir = "Views";
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			ScriptingOptions dropOptions = new ScriptingOptions();
+			dropOptions.Encoding = Encoding;
+			dropOptions.IncludeIfNotExists = true;
+			dropOptions.ScriptDrops = true; 
+
+			ScriptingOptions viewOptions = new ScriptingOptions();
+			viewOptions.Encoding = Encoding;
+			viewOptions.Indexes = true;
+			viewOptions.Permissions = true;
+			viewOptions.Statistics = true;
+			viewOptions.PrimaryObject = false;
+
+			Scripter viewScripter = new Scripter(server);
+			viewScripter.Options = viewOptions;
+			viewScripter.PrefetchObjects = false;
+
+			ScriptingOptions triggerOptions = new ScriptingOptions();
+			triggerOptions.Encoding = Encoding;
+			triggerOptions.PrimaryObject = false;
+			triggerOptions.Triggers = true;
+
+			Scripter triggerScripter = new Scripter(server);
+			triggerScripter.Options = triggerOptions;
+			triggerScripter.PrefetchObjects = false;
+
+			SqlSmoObject[] objects = new SqlSmoObject[1];
+			foreach(View view in views)
+			{
+				string fileName = Path.Combine(relativeDir, view.Schema + "." + view.Name + ".viw");
+				string outputFileName = Path.Combine(OutputDirectory, fileName);
+				Console.WriteLine(outputFileName);
+				StringCollection script = new StringCollection();
+				script.Add("SET ANSI_NULLS " + (view.AnsiNullsStatus ? "ON" : "OFF"));
+				script.Add("SET QUOTED_IDENTIFIER " + (view.QuotedIdentifierStatus ? "ON" : "OFF"));
+				script.Add(view.ScriptHeader(true) + view.TextBody);
+				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+				{
+					WriteBatches(writer, script);
+					objects[0] = view;
+					WriteBatches(writer, viewScripter.ScriptWithList(objects));
+				}
+				this.fileNames.Add(fileName);
+				
+				foreach(Trigger trigger in view.Triggers)
+				{
+					fileName = Path.Combine(relativeDir, view.Schema + "." + trigger.Name + ".trg"); // is the trigger schema the same as the view?
+					outputFileName = Path.Combine(OutputDirectory, fileName);
+					Console.WriteLine(outputFileName);
+					using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+					{
+						objects[0] = trigger;
+						triggerScripter.Options = dropOptions;
+						WriteBatches(writer, triggerScripter.ScriptWithList(objects));
+						triggerScripter.Options = triggerOptions;
+						WriteBatches(writer, triggerScripter.ScriptWithList(objects));
+					}
+					this.fileNames.Add(fileName);
 				}
 			}
 		}
@@ -732,6 +904,116 @@ namespace Mercent.SqlServer.Management
 			}
 		}
 
+		private void ScriptUserDefinedFunctionHeaders()
+		{
+			database.PrefetchObjects(typeof(UserDefinedFunction));
+			IList<UserDefinedFunction> udfs = new List<UserDefinedFunction>();
+			foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
+			{
+				if(!udf.IsSystemObject && udf.ImplementationType == ImplementationType.TransactSql)
+				{
+					udfs.Add(udf);
+				}
+			}
+
+			if(udfs.Count == 0)
+				return;
+
+			string relativeDir = "Functions";
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			string fileName = Path.Combine(relativeDir, "Functions.sql");
+			string outputFileName = Path.Combine(OutputDirectory, fileName);
+			Console.WriteLine(outputFileName);
+			using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+			{
+				foreach(UserDefinedFunction udf in udfs)
+				{
+					writer.WriteLine(udf.TextHeader.Trim());
+					switch(udf.FunctionType)
+					{
+						case UserDefinedFunctionType.Inline:
+							writer.Write("RETURN SELECT\r\n\t");
+							string delimiter = null;
+							foreach(Column column in udf.Columns)
+							{
+								if(delimiter == null)
+									delimiter = ",\r\n\t";
+								else
+									writer.Write(delimiter);
+								string dataTypeAsString = GetDataTypeAsString(column.DataType);
+								if(String.IsNullOrEmpty(column.Collation))
+									writer.Write("CAST(NULL AS {0}) AS {1}", dataTypeAsString, column.Name);
+								else
+									writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, column.Name);
+							}
+							writer.WriteLine(';');
+							break;
+						case UserDefinedFunctionType.Scalar:
+							writer.WriteLine("BEGIN\r\n\tRETURN NULL;\r\nEND;");
+							break;
+						case UserDefinedFunctionType.Table:
+							writer.WriteLine("BEGIN\r\n\tRETURN;\r\nEND;");
+							break;
+					}
+					writer.WriteLine("GO");
+				}
+			}
+			this.fileNames.Add(fileName);
+		}
+
+		private void ScriptUserDefinedFunctions()
+		{
+			database.PrefetchObjects(typeof(UserDefinedFunction));
+			IList<UserDefinedFunction> udfs = new List<UserDefinedFunction>();
+			foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
+			{
+				if(!udf.IsSystemObject && udf.ImplementationType == ImplementationType.TransactSql)
+				{
+					udfs.Add(udf);
+				}
+			}
+
+			if(udfs.Count == 0)
+				return;
+
+			string relativeDir = "Functions";
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+			
+			ScriptingOptions options = new ScriptingOptions();
+			options.Encoding = this.Encoding;
+			options.Permissions = true;
+
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			scripter.PrefetchObjects = false;
+
+			options.PrimaryObject = false;
+			
+			SqlSmoObject[] objects = new SqlSmoObject[1];
+			foreach(UserDefinedFunction udf in udfs)
+			{
+				string fileName = Path.Combine(relativeDir, udf.Schema + "." + udf.Name + ".udf");
+				string outputFileName = Path.Combine(OutputDirectory, fileName);
+				Console.WriteLine(outputFileName);
+				StringCollection script = new StringCollection();
+				script.Add("SET ANSI_NULLS " + (udf.AnsiNullsStatus ? "ON" : "OFF"));
+				script.Add("SET QUOTED_IDENTIFIER " + (udf.QuotedIdentifierStatus ? "ON" : "OFF"));
+				script.Add(udf.ScriptHeader(true) + udf.TextBody);
+				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+				{
+					WriteBatches(writer, script);
+					objects[0] = udf;
+					WriteBatches(writer, scripter.ScriptWithList(objects));
+				}
+				this.fileNames.Add(fileName);
+			}
+		}
+		
 		private void ScriptUserDefinedFunctions(string relativeDir, UrnCollection urns)
 		{
 			ScriptingOptions dropOptions = new ScriptingOptions();
@@ -1031,6 +1313,106 @@ namespace Mercent.SqlServer.Management
 			return s.Replace(new string(c, 1), new string(c, 2));
 		}
 
+		public static string ByteArrayToHexLiteral(byte[] a)
+		{
+			if(a == null)
+			{
+				return null;
+			}
+			StringBuilder builder = new StringBuilder(a.Length * 2);
+			builder.Append("0x");
+			foreach(byte b in a)
+			{
+				builder.Append(b.ToString("X02", System.Globalization.CultureInfo.InvariantCulture));
+			}
+			return builder.ToString();
+		}
+
+		public string GetDataTypeAsString(DataType dataType)
+		{
+			StringBuilder sb = new StringBuilder();
+			sb.Append(MakeSqlBracket(dataType.Name));
+			switch(dataType.SqlDataType)
+			{
+				case SqlDataType.Binary:
+				case SqlDataType.Char:
+				case SqlDataType.NChar:
+				case SqlDataType.NVarChar:
+				case SqlDataType.VarBinary:
+				case SqlDataType.VarChar:
+					sb.Append('(');
+					sb.Append(dataType.MaximumLength);
+					sb.Append(')');
+					break;
+				case SqlDataType.NVarCharMax:
+				case SqlDataType.VarBinaryMax:
+				case SqlDataType.VarCharMax:
+					sb.Append("(max)");
+					break;
+				case SqlDataType.Decimal:
+				case SqlDataType.Numeric:
+					sb.AppendFormat("({0},{1})", dataType.NumericPrecision, dataType.NumericScale);
+					break;
+			}
+			return sb.ToString();
+		}
+
+		private string GetSqlLiteral(object val)
+		{
+			if(DBNull.Value == val || (val is INullable && ((INullable)val).IsNull))
+				return "NULL";
+			else if(val is System.Data.SqlTypes.SqlBinary)
+			{
+				return ByteArrayToHexLiteral(((SqlBinary)val).Value);
+			}
+			else if(val is System.Data.SqlTypes.SqlBoolean)
+			{
+				return ((SqlBoolean)val).Value ? "1" : "0";
+			}
+			else if(val is System.Data.SqlTypes.SqlBytes)
+			{
+				return ByteArrayToHexLiteral(((SqlBytes)val).Value);
+			}
+			else if(val is System.Data.SqlTypes.SqlChars)
+			{
+				return "'" + EscapeChar(new string(((SqlChars)val).Value), '\'') + "'";
+			}
+			else if(val is System.Data.SqlTypes.SqlDateTime)
+			{
+				return ((SqlDateTime)val).Value.ToString("'yyyy-MM-ddTHH:mm:ss.fff'");
+			}
+			else if(val is System.Data.SqlTypes.SqlDecimal
+				|| val is System.Data.SqlTypes.SqlByte
+				|| val is System.Data.SqlTypes.SqlInt16
+				|| val is System.Data.SqlTypes.SqlInt32
+				|| val is System.Data.SqlTypes.SqlInt64
+				|| val is System.Data.SqlTypes.SqlMoney)
+			{
+				return val.ToString();
+			}
+			else if(val is System.Data.SqlTypes.SqlSingle)
+			{
+				return ((SqlSingle)val).Value.ToString("r");
+			}
+			else if(val is System.Data.SqlTypes.SqlDouble)
+			{
+				return ((SqlDouble)val).Value.ToString("r");
+			}
+			else if(val is System.Data.SqlTypes.SqlGuid
+				|| val is System.Data.SqlTypes.SqlString)
+			{
+				return "'" + EscapeChar(val.ToString(), '\'') + "'";
+			}
+			else if(val is System.Data.SqlTypes.SqlXml)
+			{
+				return "'" + EscapeChar(((SqlXml)val).Value, '\'') + "'";
+			}
+			else
+			{
+				throw new ApplicationException("Unsupported type :" + val.GetType().ToString());
+			}
+		}
+
 		/// <summary>
 		/// Writes out batches of SQL statements.
 		/// </summary>
@@ -1040,25 +1422,25 @@ namespace Mercent.SqlServer.Management
 		/// Each string in the collection of SQL statements is trimmed before being written.
 		/// A 'GO' statement is added after each one.
 		/// </remarks>
-		private void WriteBatches(TextWriter writer, StringCollection batches)
+		private void WriteBatches(TextWriter writer, StringCollection script)
 		{
-			foreach(string batch in batches)
+			foreach(string batch in script)
 			{
 				writer.WriteLine(batch.Trim());
 				writer.WriteLine("GO");
 			}
 		}
 
-		private void WriteBatches(string fileName, StringCollection batches)
+		private void WriteBatches(string fileName, StringCollection script)
 		{
-			WriteBatches(fileName, false, batches);
+			WriteBatches(fileName, false, script);
 		}
 
-		private void WriteBatches(string fileName, bool append, StringCollection batches)
+		private void WriteBatches(string fileName, bool append, StringCollection script)
 		{
 			using(TextWriter writer = new StreamWriter(fileName, append, this.Encoding))
 			{
-				WriteBatches(writer, batches);
+				WriteBatches(writer, script);
 			}
 		}
 
