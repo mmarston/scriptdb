@@ -61,6 +61,8 @@ namespace Mercent.SqlServer.Management
 			server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
 
 			database = server.Databases[databaseName];
+			server.SetDefaultInitFields(typeof(Column), true);
+			server.SetDefaultInitFields(typeof(View), new string[] {"ID", "Name", "Schema", "IsSystemObject"});
 
 			ScriptDatabase();
 			ScriptRoles();
@@ -74,17 +76,16 @@ namespace Mercent.SqlServer.Management
 			ScriptAssemblies();
 			ScriptUserDefinedDataTypes();
 			ScriptUserDefinedFunctionHeaders();
-			//ScriptViewHeaders();
+			ScriptViewHeaders();
+			ScriptStoredProcedureHeaders();
 			
 			ScriptTables();
-			// TODO: still need to test/resolve dependencies between tables/udfs
-			//ScriptViews();
-			ScriptUserDefinedFunctionsAndViews();
-			ScriptStoredProcedures();
 			ScriptServiceBrokerQueues();
 			ScriptServiceBrokerServices();
-
-
+			ScriptUserDefinedFunctions();
+			ScriptViews();
+			ScriptStoredProcedures();
+			
 			using(StreamWriter writer = new StreamWriter(Path.Combine(OutputDirectory, "CreateDatabaseObjects.sql"), false, Encoding))
 			{
 				writer.WriteLine(":on error exit");
@@ -575,7 +576,6 @@ namespace Mercent.SqlServer.Management
 
 		private void ScriptViewHeaders()
 		{
-			database.PrefetchObjects(typeof(View));
 			IList<View> views = new List<View>();
 			foreach(View view in database.Views)
 			{
@@ -613,7 +613,7 @@ namespace Mercent.SqlServer.Management
 						else
 							writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, column.Name);
 					}
-
+					writer.WriteLine(";");
 					writer.WriteLine("GO");
 				}
 			}
@@ -622,7 +622,13 @@ namespace Mercent.SqlServer.Management
 
 		private void ScriptViews()
 		{
-			database.PrefetchObjects(typeof(View));
+			ScriptingOptions prefetchOptions = new ScriptingOptions();
+			prefetchOptions.Indexes = true;
+			prefetchOptions.Permissions = true;
+			prefetchOptions.Statistics = true;
+			prefetchOptions.Triggers = true;
+
+			database.PrefetchObjects(typeof(View), prefetchOptions);
 			IList<View> views = new List<View>();
 			foreach(View view in database.Views)
 			{
@@ -752,9 +758,9 @@ namespace Mercent.SqlServer.Management
 				Directory.CreateDirectory(dir);
 
 			string fileName = Path.Combine(relativeDir, "Contracts.sql");
-			Console.WriteLine(fileName);
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = Path.Combine(OutputDirectory, fileName);
+			Console.WriteLine(options.FileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
 			Scripter scripter = new Scripter(server);
@@ -802,9 +808,9 @@ namespace Mercent.SqlServer.Management
 				Directory.CreateDirectory(dir);
 
 			string fileName = Path.Combine(relativeDir, "Queues.sql");
-			Console.WriteLine(fileName);
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = Path.Combine(OutputDirectory, fileName);
+			Console.WriteLine(options.FileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
 			Scripter scripter = new Scripter(server);
@@ -834,9 +840,9 @@ namespace Mercent.SqlServer.Management
 				Directory.CreateDirectory(dir);
 
 			string fileName = Path.Combine(relativeDir, "Services.sql");
-			Console.WriteLine(fileName);
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = Path.Combine(OutputDirectory, fileName);
+			Console.WriteLine(options.FileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
 			Scripter scripter = new Scripter(server);
@@ -845,68 +851,89 @@ namespace Mercent.SqlServer.Management
 			this.fileNames.Add(fileName);
 		}
 
-		private void ScriptStoredProcedures()
+		private void ScriptStoredProcedureHeaders()
 		{
-			ScriptingOptions dropOptions = new ScriptingOptions();
-			dropOptions.Encoding = Encoding;
-			dropOptions.IncludeIfNotExists = true;
-			dropOptions.ScriptDrops = true;
+			IList<StoredProcedure> sprocs = new List<StoredProcedure>();
+			foreach(StoredProcedure sproc in database.StoredProcedures)
+			{
+				if(!sproc.IsSystemObject && sproc.ImplementationType == ImplementationType.TransactSql)
+					sprocs.Add(sproc);
+			}
 
-			ScriptingOptions options = new ScriptingOptions();
-			options.Encoding = Encoding;
-			options.Permissions = true;
-
-			Scripter scripter = new Scripter(server);
-			scripter.Options = options;
-			scripter.PrefetchObjects = false;
+			if(sprocs.Count == 0)
+				return;
 
 			string relativeDir = "Stored Procedures";
 			string dir = Path.Combine(OutputDirectory, relativeDir);
-			if (!Directory.Exists(dir))
+			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
 
-			database.PrefetchObjects(typeof(StoredProcedure), options);
-			UrnCollection urns = new UrnCollection();
-			SqlSmoObject[] objects = new SqlSmoObject[1];
-			foreach (StoredProcedure sproc in database.StoredProcedures)
+			string fileName = Path.Combine(relativeDir, "Stored Procedures.sql");
+			string outputFileName = Path.Combine(OutputDirectory, fileName);
+			Console.WriteLine(outputFileName);
+			using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 			{
-				if (!sproc.IsSystemObject && sproc.ImplementationType == ImplementationType.TransactSql)
+				foreach(StoredProcedure sproc in sprocs)
 				{
-					string filename = Path.Combine(relativeDir, sproc.Schema + "." + sproc.Name + ".prc");
-					string outputFileName = Path.Combine(OutputDirectory, filename);
-					Console.WriteLine(outputFileName);
-					using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
-					{
-						objects[0] = sproc;
-						scripter.Options = dropOptions;
-						WriteBatches(writer, scripter.ScriptWithList(objects));
-						scripter.Options = options;
-						WriteBatches(writer, scripter.ScriptWithList(objects));
-					}
-					urns.Add(sproc.Urn);
+					writer.WriteLine(sproc.TextHeader.Trim());
+					writer.WriteLine("GO");
 				}
 			}
+			this.fileNames.Add(fileName);
+		}
 
-			if (urns.Count <= 0)
+		private void ScriptStoredProcedures()
+		{
+			ScriptingOptions dropOptions = new ScriptingOptions();
+			dropOptions.IncludeIfNotExists = true;
+			dropOptions.ScriptDrops = true;
+			
+			ScriptingOptions options = new ScriptingOptions();
+			options.Permissions = true;
+
+			database.PrefetchObjects(typeof(StoredProcedure), options);
+			IList<StoredProcedure> sprocs = new List<StoredProcedure>();
+			foreach(StoredProcedure sproc in database.StoredProcedures)
+			{
+				if(!sproc.IsSystemObject && sproc.ImplementationType == ImplementationType.TransactSql)
+					sprocs.Add(sproc);
+			}
+
+			if(sprocs.Count == 0)
 				return;
 
-			DependencyWalker walker = new DependencyWalker(server);
-			DependencyTree tree = walker.DiscoverDependencies(urns, DependencyType.Parents);
-			DependencyCollection dependencies = walker.WalkDependencies(tree);
-			foreach(DependencyCollectionNode node in dependencies)
+			string relativeDir = "Stored Procedures";
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			options.PrimaryObject = false;
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			scripter.PrefetchObjects = false;
+			scripter.Options.PrimaryObject = false;
+			
+			SqlSmoObject[] objects = new SqlSmoObject[1];
+			foreach (StoredProcedure sproc in sprocs)
 			{
-				// Check that the dependency is a udf that we have scripted out
-				if(urns.Contains(node.Urn) && node.Urn.Type == "StoredProcedure")
+				string fileName = Path.Combine(relativeDir, sproc.Schema + "." + sproc.Name + ".prc");
+				string outputFileName = Path.Combine(OutputDirectory, fileName);
+				Console.WriteLine(outputFileName);
+				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 				{
-					string filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".prc";
-					this.fileNames.Add(Path.Combine(relativeDir, filename));
+					objects[0] = sproc;
+					scripter.Options = dropOptions;
+					WriteBatches(writer, scripter.ScriptWithList(objects));
+					scripter.Options = options;
+					WriteBatches(writer, scripter.ScriptWithList(objects));
 				}
+				this.fileNames.Add(fileName);
 			}
 		}
 
 		private void ScriptUserDefinedFunctionHeaders()
 		{
-			database.PrefetchObjects(typeof(UserDefinedFunction));
+			//database.PrefetchObjects(typeof(UserDefinedFunction));
 			IList<UserDefinedFunction> udfs = new List<UserDefinedFunction>();
 			foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
 			{
@@ -1272,7 +1299,8 @@ namespace Mercent.SqlServer.Management
 				if(xmlSchemaCollection.ID >= 65536)
 				{
 					string fileName = Path.Combine(relativeDir, xmlSchemaCollection.Schema + "." + xmlSchemaCollection.Name + ".sql");
-					Console.WriteLine(fileName);
+					string outputFileName = Path.Combine(OutputDirectory, fileName);
+					Console.WriteLine(outputFileName);
 					using(TextReader textReader = new StringReader(xmlSchemaCollection.Text))
 					{
 						using(XmlReader xmlReader = XmlReader.Create(textReader, readerSettings))
@@ -1291,7 +1319,7 @@ namespace Mercent.SqlServer.Management
 						}
 					}
 					sb.Replace("'", "''");
-					using(TextWriter writer = new StreamWriter(Path.Combine(OutputDirectory, fileName), false, this.Encoding))
+					using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 					{
 						writer.WriteLine("CREATE XML SCHEMA COLLECTION {0}.{1} AS N'", MakeSqlBracket(xmlSchemaCollection.Schema), MakeSqlBracket(xmlSchemaCollection.Name));
 						writer.WriteLine(sb.ToString());

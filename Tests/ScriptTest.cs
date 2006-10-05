@@ -668,7 +668,7 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestStoredProcedures()
 		{
-			Database database = server.Databases["Product_Datawarehouse"];
+			Database database = server.Databases["Merchant_Prod_Limoges"];
 
 			ScriptingOptions dropOptions = new ScriptingOptions();
 			//dropOptions.ToFileOnly = true;
@@ -685,6 +685,7 @@ namespace Mercent.SqlServer.Management.Tests
 			Scripter sprocScripter = new Scripter(server);
 			sprocScripter.Options = sprocOptions;
 			sprocScripter.PrefetchObjects = false;
+			sprocOptions.PrimaryObject = false;
 
 			if (!Directory.Exists("Stored Procedures"))
 				Directory.CreateDirectory("Stored Procedures");
@@ -693,7 +694,7 @@ namespace Mercent.SqlServer.Management.Tests
 
 			foreach (StoredProcedure sproc in database.StoredProcedures)
 			{
-				if (!sproc.IsSystemObject)
+				if (!sproc.IsSystemObject && sproc.ImplementationType == ImplementationType.TransactSql)
 				{
 					string filename = Path.Combine("Stored Procedures", sproc.Schema + "." + sproc.Name + ".prc");
 					//dropOptions.FileName = filename;
@@ -709,7 +710,8 @@ namespace Mercent.SqlServer.Management.Tests
 						}
 						sprocScripter.Options = sprocOptions;
 
-						batches = sprocScripter.ScriptWithList(new SqlSmoObject[] { sproc });
+						//batches = sprocScripter.ScriptWithList(new SqlSmoObject[] { sproc });
+						batches = sproc.Script(sprocOptions);
 						foreach(string batch in batches)
 						{
 							writer.WriteLine(batch.Trim());
@@ -721,7 +723,129 @@ namespace Mercent.SqlServer.Management.Tests
 			}
 		}
 
-		
+		[Test]
+		public void TestParameterDefaultValue()
+		{
+			Database database = server.Databases["Merchant_Prod_Limoges"];
+			database.PrefetchObjects(typeof(StoredProcedure));
+			StoredProcedure procedure = database.StoredProcedures["BulkEditProduct2"];
+
+			string sqlCommand = String.Format("SELECT parameter_id, default_value FROM {0}.sys.parameters WHERE [object_id] = {1} AND has_default_value = 1",
+				MakeSqlBracket(database.Name), procedure.ID);
+			object[] defaults = new object[procedure.Parameters.Count];
+			using(SqlDataReader reader = server.ConnectionContext.ExecuteReader(sqlCommand))
+			{
+				while(reader.Read())
+				{
+					defaults[reader.GetInt32(0) - 1] = reader.GetSqlValue(1);
+				}
+			}
+			for(int i = 0; i < defaults.Length; i++)
+			{
+				if(defaults[i] != null)
+				{
+					procedure.Parameters[i].DefaultValue = GetSqlLiteral(defaults[i]);
+				}
+			}
+
+			server.ConnectionContext.ExecuteNonQuery("Use " + database.Name);
+			//server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
+			//procedure.Alter();
+			//StringCollection batches = server.ConnectionContext.CapturedSql.Text;
+			Scripter scripter = new Scripter(server);
+			StringCollection batches = scripter.ScriptWithList(new Urn[] { procedure.Urn });
+			
+			//StringCollection batches  = procedure.Script();
+			foreach(string batch in batches)
+			{
+				Console.WriteLine(batch);
+			}
+		}
+
+		public string GetSqlLiteral(object val)
+		{
+			if(DBNull.Value == val || (val is INullable && ((INullable)val).IsNull))
+				return "NULL";
+			else if(val is System.Data.SqlTypes.SqlBinary)
+			{
+				return ByteArrayToHexLiteral(((SqlBinary)val).Value);
+			}
+			else if(val is System.Data.SqlTypes.SqlBoolean)
+			{
+				return ((SqlBoolean)val).Value ? "1" : "0";
+			}
+			else if(val is System.Data.SqlTypes.SqlBytes)
+			{
+				return ByteArrayToHexLiteral(((SqlBytes)val).Value);
+			}
+			else if(val is System.Data.SqlTypes.SqlChars)
+			{
+				return "'" + EscapeChar(new string(((SqlChars)val).Value), '\'') + "'";
+			}
+			else if(val is System.Data.SqlTypes.SqlDateTime)
+			{
+				return ((SqlDateTime)val).Value.ToString("'yyyy-MM-ddTHH:mm:ss.fff'");
+			}
+			else if(val is System.Data.SqlTypes.SqlDecimal
+				|| val is System.Data.SqlTypes.SqlByte
+				|| val is System.Data.SqlTypes.SqlInt16
+				|| val is System.Data.SqlTypes.SqlInt32
+				|| val is System.Data.SqlTypes.SqlInt64
+				|| val is System.Data.SqlTypes.SqlMoney)
+			{
+				return val.ToString();
+			}
+			else if(val is System.Data.SqlTypes.SqlSingle)
+			{
+				return ((SqlSingle)val).Value.ToString("r");
+			}
+			else if(val is System.Data.SqlTypes.SqlDouble)
+			{
+				return ((SqlDouble)val).Value.ToString("r");
+			}
+			else if(val is System.Data.SqlTypes.SqlGuid
+				|| val is System.Data.SqlTypes.SqlString)
+			{
+				return "'" + EscapeChar(val.ToString(), '\'') + "'";
+			}
+			else if(val is System.Data.SqlTypes.SqlXml)
+			{
+				return "'" + EscapeChar(((SqlXml)val).Value, '\'') +  "'";
+			}
+			else
+			{
+				throw new ApplicationException("Unsupported type :" + val.GetType().ToString());
+			}
+		}
+
+		public string GetDataTypeAsString(DataType dataType)
+		{
+			StringBuilder sb = new StringBuilder();
+			sb.Append(MakeSqlBracket(dataType.Name));
+			switch(dataType.SqlDataType)
+			{
+				case SqlDataType.Binary:
+				case SqlDataType.Char:
+				case SqlDataType.NChar:
+				case SqlDataType.NVarChar:
+				case SqlDataType.VarBinary:
+				case SqlDataType.VarChar:
+					sb.Append('(');
+					sb.Append(dataType.MaximumLength);
+					sb.Append(')');
+					break;
+				case SqlDataType.NVarCharMax:
+				case SqlDataType.VarBinaryMax:
+				case SqlDataType.VarCharMax:
+					sb.Append("(max)");
+					break;
+				case SqlDataType.Decimal:
+				case SqlDataType.Numeric:
+					sb.AppendFormat("({0},{1})", dataType.NumericPrecision, dataType.NumericScale);
+					break;
+			}
+			return sb.ToString();
+		}
 
 		[Test]
 		public void TestUdfs()
@@ -750,6 +874,139 @@ namespace Mercent.SqlServer.Management.Tests
 					string filename = Path.Combine(dir, udf.Schema + "." + udf.Name + ".udf");
 					udfScripter.Options.FileName = filename;
 					udfScripter.ScriptWithList(new SqlSmoObject[] { udf });
+				}
+			}
+		}
+
+		[Test]
+		public void TestAlterUdfs()
+		{
+			Database database = server.Databases["SEM_Merchant"];
+
+			ScriptingOptions udfOptions = new ScriptingOptions();
+			udfOptions.Encoding = System.Text.Encoding.UTF8;
+			udfOptions.Permissions = true;
+
+			Scripter udfScripter = new Scripter(server);
+			udfScripter.Options = udfOptions;
+			udfScripter.PrefetchObjects = false;
+			
+			string dir = "Functions";
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			database.PrefetchObjects(typeof(UserDefinedFunction), udfOptions);
+			udfOptions.PrimaryObject = false;
+
+			foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
+			{
+				if(!udf.IsSystemObject && udf.ImplementationType == ImplementationType.TransactSql)
+				{
+					string filename = Path.Combine(dir, udf.Schema + "." + udf.Name + ".udf");
+					StringCollection script = udfScripter.ScriptWithList(new SqlSmoObject[] { udf });
+					
+					//server.ConnectionContext.CapturedSql.Clear();
+					//server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
+					//udf.ScriptHeader(true);
+					//StringCollection script = server.ConnectionContext.CapturedSql.Text;
+					using(TextWriter writer = new StreamWriter(filename, false, Encoding.UTF8))
+					{
+						writer.Write("SET ANSI_NULLS ");
+						writer.WriteLine(udf.AnsiNullsStatus ? "ON" : "OFF");
+						writer.WriteLine("GO");
+						writer.Write("SET QUOTED_IDENTIFIER ");
+						writer.WriteLine("GO");
+						writer.WriteLine(udf.QuotedIdentifierStatus ? "ON" : "OFF");
+						writer.WriteLine("GO");
+						writer.WriteLine(udf.ScriptHeader(true).Trim());
+						writer.WriteLine(udf.TextBody.Trim());
+						writer.WriteLine("GO");
+						foreach(string batch in script)
+						{
+							string trimmedBatch = batch.Trim();
+							writer.WriteLine(trimmedBatch);
+							writer.WriteLine("GO");
+						}
+						
+					}
+				}
+			}
+		}
+
+		[Test]
+		public void TestUdfHeaders()
+		{
+			Database database = server.Databases["Merchant_Prod_Limoges"];
+
+			string dir = "Functions";
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			database.PrefetchObjects(typeof(UserDefinedFunction));
+			string filename = Path.Combine(dir, "Functions.sql");
+					
+			using(TextWriter writer = new StreamWriter(filename, false, Encoding.UTF8))
+			{
+				foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
+				{
+					if(!udf.IsSystemObject && udf.ImplementationType == ImplementationType.TransactSql)
+					{
+						writer.WriteLine(udf.TextHeader.Trim());
+						switch(udf.FunctionType)
+						{
+							case UserDefinedFunctionType.Inline:
+								writer.Write("RETURN SELECT\r\n\t");
+								string delimiter = null;
+								foreach(Column column in udf.Columns)
+								{
+									if(delimiter == null)
+										delimiter = ",\r\n\t";
+									else
+										writer.Write(delimiter);
+									string dataTypeAsString = GetDataTypeAsString(column.DataType);
+									if(String.IsNullOrEmpty(column.Collation))
+										writer.Write("CAST(NULL AS {0}) AS {1}", dataTypeAsString, column.Name);
+									else
+										writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, column.Name);
+								}
+								writer.WriteLine(';');
+								break;
+							case UserDefinedFunctionType.Scalar:
+								writer.WriteLine("BEGIN\r\n\tRETURN NULL;\r\nEND;");
+								break;
+							case UserDefinedFunctionType.Table:
+								writer.WriteLine("BEGIN\r\n\tRETURN;\r\nEND;");
+								break;
+						}
+						writer.WriteLine("GO");
+					}
+				}
+			}
+		}
+
+		[Test]
+		public void TestPrefetchViewColumns()
+		{
+			Database database = server.Databases["Merchant_Prod_Limoges"];
+
+			server.SetDefaultInitFields(typeof(Column), true);
+			database.PrefetchObjects(typeof(View));
+			//server.SetDefaultInitFields(typeof(View), new string[] { "Columns" });
+			//database.PrefetchObjects(typeof(Column));
+			foreach(View view in database.Views)
+			{
+				//DataTable dataTable = view.EnumColumns();
+				//foreach(DataColumn column in dataTable.Columns)
+				//{
+				//    Console.WriteLine(column.ColumnName);
+				//}
+				//foreach(
+
+				//view.ReturnsViewMetadata = true;
+				//view.Refresh(true);
+				foreach(Column column in view.Columns)
+				{
+					Console.WriteLine("{0} {1}", column.Name, column.DataType);
 				}
 			}
 		}
