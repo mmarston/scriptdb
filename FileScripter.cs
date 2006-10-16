@@ -609,9 +609,9 @@ namespace Mercent.SqlServer.Management
 							writer.Write(delimiter);
 						string dataTypeAsString = GetDataTypeAsString(column.DataType);
 						if(String.IsNullOrEmpty(column.Collation))
-							writer.Write("CAST(NULL AS {0}) AS {1}", dataTypeAsString, column.Name);
+							writer.Write("CAST(NULL AS {0}) AS {1}", dataTypeAsString, MakeSqlBracket(column.Name));
 						else
-							writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, column.Name);
+							writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, MakeSqlBracket(column.Name));
 					}
 					writer.WriteLine(";");
 					writer.WriteLine("GO");
@@ -972,9 +972,9 @@ namespace Mercent.SqlServer.Management
 									writer.Write(delimiter);
 								string dataTypeAsString = GetDataTypeAsString(column.DataType);
 								if(String.IsNullOrEmpty(column.Collation))
-									writer.Write("CAST(NULL AS {0}) AS {1}", dataTypeAsString, column.Name);
+									writer.Write("CAST(NULL AS {0}) AS {1}", dataTypeAsString, MakeSqlBracket(column.Name));
 								else
-									writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, column.Name);
+									writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, MakeSqlBracket(column.Name));
 							}
 							writer.WriteLine(';');
 							break;
@@ -1283,6 +1283,13 @@ namespace Mercent.SqlServer.Management
 
 			StringBuilder sb = new StringBuilder();
 
+			ScriptingOptions options = new ScriptingOptions();
+			options.PrimaryObject = false;
+			options.Permissions = true;
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+
+			
 			XmlWriterSettings writerSettings = new XmlWriterSettings();
 			writerSettings.ConformanceLevel = ConformanceLevel.Fragment;
 			writerSettings.NewLineOnAttributes = true;
@@ -1292,7 +1299,8 @@ namespace Mercent.SqlServer.Management
 
 			XmlReaderSettings readerSettings = new XmlReaderSettings();
 			readerSettings.ConformanceLevel = ConformanceLevel.Fragment;
-
+			SqlSmoObject[] objects = new SqlSmoObject[1];
+			
 			foreach(XmlSchemaCollection xmlSchemaCollection in xmlSchemaCollections)
 			{
 				// this is a hack to only get user defined xml schema collections, not built in ones
@@ -1325,6 +1333,13 @@ namespace Mercent.SqlServer.Management
 						writer.WriteLine(sb.ToString());
 						writer.WriteLine("'");
 						writer.WriteLine("GO");
+						objects[0] = xmlSchemaCollection;
+						// script out permissions
+						StringCollection script = scripter.ScriptWithList(objects);
+						// Remove the CREATE XML SCHEMA statement as we've already written it above (with formatted XML).
+						// This appears to be a bug with SQL SMO that ignores the PrimaryObject scripting option.
+						script.RemoveAt(0); 
+						WriteBatches(writer, script);
 					}
 					this.fileNames.Add(fileName);
 				}
