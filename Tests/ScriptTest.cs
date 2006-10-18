@@ -21,11 +21,13 @@ namespace Mercent.SqlServer.Management.Tests
 	public class ScriptTest
 	{
 		private Server server;
+		private Database database;
 
 		[SetUp]
 		public void SetUp()
 		{
-			server = new Server(@"mmarston");
+			server = new Server(@"tank");
+			database = server.Databases["Product_Tracking"];
 			//server = new Server(@"tank");
 			//server.SetDefaultInitFields(typeof(StoredProcedure), "IsSystemObject");
 			//server.SetDefaultInitFields(typeof(UserDefinedFunction), "IsSystemObject");
@@ -36,7 +38,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void Test1()
 		{
-			Database database = server.Databases["SEM_Admin"];
 			Scripter scripter = new Scripter(server);
 			DependencyTree dependencyTree = scripter.DiscoverDependencies(new Urn[] { database.Urn }, DependencyType.Parents);
 			DependencyCollection dependencyCollection = scripter.WalkDependencies(dependencyTree);
@@ -49,7 +50,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void Test2()
 		{
-			Database database = server.Databases["Test"];
 			Scripter scripter = new Scripter(server);
 			UrnCollection depencencies = Scripter.EnumDependencies(database.Tables["Table2"], DependencyType.Parents);
 			foreach (Urn urn in depencencies)
@@ -61,7 +61,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void Test3()
 		{
-			Database database = server.Databases["Test"];
 			ScriptingOptions options = new ScriptingOptions();
 			//options.WithDependencies = true;
 			options.ToFileOnly = true;
@@ -74,7 +73,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestDatabase()
 		{
-			Database database = server.Databases["SEM_Merchant"];
 			//server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
 			//database.Rename("$(NEW_DB_NAME)");
 			////server.ConnectionContext.CapturedSql.Clear();
@@ -98,7 +96,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestAssemblies()
 		{
-			Database database = server.Databases["Product_Merchant"];
 
 			ScriptingOptions assemblyOptions = new ScriptingOptions();
 			assemblyOptions.ToFileOnly = true;
@@ -171,7 +168,6 @@ namespace Mercent.SqlServer.Management.Tests
 			ScriptingOptions options = new ScriptingOptions();
 			options.ToFileOnly = true;
 			options.FileName = "TransferDatabase.sql";
-			Database database = server.Databases["SEM_Merchant"];
 			Transfer transfer = new Transfer(database);
 			transfer.CreateTargetDatabase = true;
 			transfer.DestinationDatabase = "$(NEW_DB_NAME)";
@@ -190,7 +186,6 @@ namespace Mercent.SqlServer.Management.Tests
 			options.ToFileOnly = true;
 			options.FileName = "TransferTables.sql";
 
-			Database database = server.Databases["SEM_Merchant"];
 			Transfer transfer = new Transfer(database);
 			transfer.CopyAllObjects = false;
 			transfer.CopyAllTables = true;
@@ -205,7 +200,6 @@ namespace Mercent.SqlServer.Management.Tests
 			options.ToFileOnly = true;
 			options.FileName = "TransferTypes.sql";
 
-			Database database = server.Databases["SEM_Merchant"];
 			Transfer transfer = new Transfer(database);
 			transfer.CopyAllObjects = false;
 			transfer.CopyAllUserDefinedDataTypes = true;
@@ -220,7 +214,6 @@ namespace Mercent.SqlServer.Management.Tests
 			ScriptingOptions options = new ScriptingOptions();
 			options.ToFileOnly = true;
 			options.FileName = "TransferAssemblies.sql";
-			Database database = server.Databases["SEM_Merchant"];
 			Transfer transfer = new Transfer(database);
 			transfer.CopyAllObjects = false;
 			transfer.CopyAllSqlAssemblies = true;
@@ -231,7 +224,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestTables()
 		{
-			Database database = server.Databases["SEM_Merchant"];
 			ScriptingOptions tableOptions = new ScriptingOptions();
 			tableOptions.ToFileOnly = true;
 			tableOptions.Encoding = System.Text.Encoding.UTF8;
@@ -335,7 +327,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestViews()
 		{
-			Database database = server.Databases["SEM_Merchant"];
 
 			ScriptingOptions viewOptions = new ScriptingOptions();
 			viewOptions.ToFileOnly = true;
@@ -402,10 +393,85 @@ namespace Mercent.SqlServer.Management.Tests
 		}
 
 		[Test]
+		public void TestViewsWithSchemaBinding()
+		{
+
+			ScriptingOptions viewOptions = new ScriptingOptions();
+			viewOptions.ToFileOnly = true;
+			viewOptions.Encoding = System.Text.Encoding.UTF8;
+			viewOptions.Indexes = true;
+			viewOptions.Permissions = true;
+			viewOptions.Statistics = true;
+
+			Scripter viewScripter = new Scripter(server);
+			viewScripter.Options = viewOptions;
+			viewScripter.PrefetchObjects = false;
+
+			ScriptingOptions triggerOptions = new ScriptingOptions();
+			triggerOptions.ToFileOnly = true;
+			triggerOptions.Encoding = System.Text.Encoding.UTF8;
+			triggerOptions.PrimaryObject = false;
+			triggerOptions.Triggers = true;
+
+			Scripter triggerScripter = new Scripter(server);
+			triggerScripter.Options = triggerOptions;
+			triggerScripter.PrefetchObjects = false;
+
+			if(!Directory.Exists("Views"))
+				Directory.CreateDirectory("Views");
+
+			ScriptingOptions prefetchOptions = new ScriptingOptions();
+			prefetchOptions.Indexes = true;
+			prefetchOptions.Permissions = true;
+			prefetchOptions.Statistics = true;
+			prefetchOptions.Triggers = true;
+
+			database.PrefetchObjects(typeof(View), prefetchOptions);
+
+			UrnCollection schemaBoundViews = new UrnCollection();
+			UrnCollection nonSchemaBoundViews = new UrnCollection();
+			UrnCollection triggerUrns = new UrnCollection();
+
+			foreach(View view in database.Views)
+			{
+				if(!view.IsSystemObject)
+				{
+					string filename = Path.Combine("Views", view.Schema + "." + view.Name + ".viw");
+					viewScripter.Options.FileName = filename;
+					viewScripter.ScriptWithList(new SqlSmoObject[] { view });
+					if(view.IsSchemaBound)
+						schemaBoundViews.Add(view.Urn);
+					else
+						nonSchemaBoundViews.Add(view.Urn);
+					foreach(Trigger trigger in view.Triggers)
+					{
+						triggerScripter.Options.FileName = Path.Combine("Views", view.Schema + "." + trigger.Name + ".trg");
+						triggerScripter.ScriptWithList(new SqlSmoObject[] { trigger });
+						triggerUrns.Add(trigger.Urn);
+					}
+				}
+			}
+
+			if(schemaBoundViews.Count > 0)
+			{
+				DependencyWalker walker = new DependencyWalker(server);
+				DependencyTree tree = walker.DiscoverDependencies(schemaBoundViews, DependencyType.Parents);
+				DependencyCollection dependencies = walker.WalkDependencies(tree);
+				using(TextWriter writer = new StreamWriter(@"Views\Dependencies.txt"))
+				{
+					foreach(DependencyCollectionNode node in dependencies)
+					{
+						if(schemaBoundViews.Contains(node.Urn))
+							writer.WriteLine(node.Urn);
+						//writer.WriteLine("r: {0}.{1}.tab", node.Urn.GetAttribute("Schema"), node.Urn.GetAttribute("Name"));
+					}
+				}
+			}
+		}
+
+		[Test]
 		public void TestTransferDependencies()
 		{
-			//Database database = server.Databases["Merchant_Prod_Limoges"];
-			Database database = server.Databases["Product_Merchant"];
 			Transfer transfer = new Transfer(database);
 			transfer.Options.WithDependencies = true;
 			transfer.CopyAllObjects = false;
@@ -422,7 +488,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestTransferDependencies2()
 		{
-			Database database = server.Databases["Product_Merchant"];
 
 			ArrayList objects = new ArrayList();
 			database.PrefetchObjects(typeof(UserDefinedFunction));
@@ -442,7 +507,6 @@ namespace Mercent.SqlServer.Management.Tests
 				}
 			}
 
-			//Database database = server.Databases["Merchant_Prod_Limoges"];
 			Transfer transfer = new Transfer(database);
 			transfer.Options.WithDependencies = true;
 			transfer.CopyAllObjects = false;
@@ -459,7 +523,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestDiscoverDependencies()
 		{
-			Database database = server.Databases["Product_Merchant"];
 
 			UrnCollection urns = new UrnCollection();
 			database.PrefetchObjects(typeof(UserDefinedFunction));
@@ -494,7 +557,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestXmlSchemaCollections()
 		{
-			Database database = server.Databases["Merchant_Prod_Limoges"];
 
 			if(!Directory.Exists("XmlSchemaCollections"))
 				Directory.CreateDirectory("XmlSchemaCollections");
@@ -547,7 +609,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestServiceBrokerMessageTypes()
 		{
-			Database database = server.Databases["Merchant_Prod_Limoges"];
 			
 			if(!Directory.Exists("ServiceBroker"))
 				Directory.CreateDirectory("ServiceBroker");
@@ -575,7 +636,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestServiceBrokerContracts()
 		{
-			Database database = server.Databases["Merchant_Prod_Limoges"];
 
 			if(!Directory.Exists("ServiceBroker"))
 				Directory.CreateDirectory("ServiceBroker");
@@ -603,7 +663,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestServiceBrokerQueues()
 		{
-			Database database = server.Databases["Merchant_Prod_Limoges"];
 
 			if(!Directory.Exists("ServiceBroker"))
 				Directory.CreateDirectory("ServiceBroker");
@@ -641,7 +700,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestServiceBrokerServices()
 		{
-			Database database = server.Databases["Merchant_Prod_Limoges"];
 
 			if(!Directory.Exists("ServiceBroker"))
 				Directory.CreateDirectory("ServiceBroker");
@@ -668,7 +726,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestStoredProcedures()
 		{
-			Database database = server.Databases["Merchant_Prod_Limoges"];
 
 			ScriptingOptions dropOptions = new ScriptingOptions();
 			//dropOptions.ToFileOnly = true;
@@ -726,7 +783,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestParameterDefaultValue()
 		{
-			Database database = server.Databases["Merchant_Prod_Limoges"];
 			database.PrefetchObjects(typeof(StoredProcedure));
 			StoredProcedure procedure = database.StoredProcedures["BulkEditProduct2"];
 
@@ -821,7 +877,6 @@ namespace Mercent.SqlServer.Management.Tests
 		public string GetDataTypeAsString(DataType dataType)
 		{
 			StringBuilder sb = new StringBuilder();
-			sb.Append(MakeSqlBracket(dataType.Name));
 			switch(dataType.SqlDataType)
 			{
 				case SqlDataType.Binary:
@@ -830,6 +885,7 @@ namespace Mercent.SqlServer.Management.Tests
 				case SqlDataType.NVarChar:
 				case SqlDataType.VarBinary:
 				case SqlDataType.VarChar:
+					sb.Append(MakeSqlBracket(dataType.Name));
 					sb.Append('(');
 					sb.Append(dataType.MaximumLength);
 					sb.Append(')');
@@ -837,11 +893,48 @@ namespace Mercent.SqlServer.Management.Tests
 				case SqlDataType.NVarCharMax:
 				case SqlDataType.VarBinaryMax:
 				case SqlDataType.VarCharMax:
+					sb.Append(MakeSqlBracket(dataType.Name));
 					sb.Append("(max)");
 					break;
 				case SqlDataType.Decimal:
 				case SqlDataType.Numeric:
+					sb.Append(MakeSqlBracket(dataType.Name));
 					sb.AppendFormat("({0},{1})", dataType.NumericPrecision, dataType.NumericScale);
+					break;
+				case SqlDataType.UserDefinedDataType:
+					// For a user defined type, get the base data type as string
+					UserDefinedDataType uddt = database.UserDefinedDataTypes[dataType.Name, dataType.Schema];
+					SqlDataType systemType = (SqlDataType)Enum.Parse(typeof(SqlDataType), uddt.SystemType, true);
+					DataType baseDataType;
+					switch(systemType)
+					{
+						case SqlDataType.Binary:
+						case SqlDataType.Char:
+						case SqlDataType.NChar:
+						case SqlDataType.NVarChar:
+						case SqlDataType.VarBinary:
+						case SqlDataType.VarChar:
+						case SqlDataType.NVarCharMax:
+						case SqlDataType.VarBinaryMax:
+						case SqlDataType.VarCharMax:
+							baseDataType = new DataType(systemType, uddt.MaxLength);
+							break;
+						case SqlDataType.Decimal:
+						case SqlDataType.Numeric:
+							baseDataType = new DataType(systemType, uddt.NumericPrecision, uddt.NumericScale);
+							break;
+						default:
+							baseDataType = new DataType(systemType);
+							break;
+					}
+					return GetDataTypeAsString(baseDataType);
+				case SqlDataType.Xml:
+					sb.Append("[xml]");
+					if(!String.IsNullOrEmpty(dataType.Name))
+						sb.AppendFormat("({0} {1})", dataType.XmlDocumentConstraint, dataType.Name);
+					break;
+				default:
+					sb.Append(MakeSqlBracket(dataType.Name));
 					break;
 			}
 			return sb.ToString();
@@ -850,7 +943,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestUdfs()
 		{
-			Database database = server.Databases["SEM_Merchant"];
 
 			ScriptingOptions udfOptions = new ScriptingOptions();
 			udfOptions.ToFileOnly = true;
@@ -881,7 +973,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestAlterUdfs()
 		{
-			Database database = server.Databases["SEM_Merchant"];
 
 			ScriptingOptions udfOptions = new ScriptingOptions();
 			udfOptions.Encoding = System.Text.Encoding.UTF8;
@@ -936,7 +1027,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestUdfHeaders()
 		{
-			Database database = server.Databases["Merchant_Prod_Limoges"];
 
 			string dir = "Functions";
 			if(!Directory.Exists(dir))
@@ -985,12 +1075,54 @@ namespace Mercent.SqlServer.Management.Tests
 		}
 
 		[Test]
+		public void TestViewHeaders()
+		{
+
+			string dir = "Views";
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			string fileName = Path.Combine(dir, "Views.sql");
+			Console.WriteLine(fileName);
+			
+			server.SetDefaultInitFields(typeof(Column), true);
+
+			using(TextWriter writer = new StreamWriter(fileName, false, Encoding.UTF8))
+			{
+				View view = database.Views["vwAlltype"];
+				//foreach(View view in database.Views)
+				{
+					if(!view.IsSystemObject)
+					{
+
+						writer.WriteLine(view.TextHeader.Trim());
+						writer.Write("SELECT\r\n\t");
+						string delimiter = null;
+						foreach(Column column in view.Columns)
+						{
+							if(delimiter == null)
+								delimiter = ",\r\n\t";
+							else
+								writer.Write(delimiter);
+							string dataTypeAsString = GetDataTypeAsString(column.DataType);
+							if(String.IsNullOrEmpty(column.Collation))
+								writer.Write("CAST(NULL AS {0}) AS {1}", dataTypeAsString, MakeSqlBracket(column.Name));
+							else
+								writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, MakeSqlBracket(column.Name));
+						}
+						writer.WriteLine(";");
+						writer.WriteLine("GO");
+					}
+				}
+			}
+		}
+
+		[Test]
 		public void TestPrefetchViewColumns()
 		{
-			Database database = server.Databases["Merchant_Prod_Limoges"];
 
 			server.SetDefaultInitFields(typeof(Column), true);
-			database.PrefetchObjects(typeof(View));
+		//	database.PrefetchObjects(typeof(View));
 			//server.SetDefaultInitFields(typeof(View), new string[] { "Columns" });
 			//database.PrefetchObjects(typeof(Column));
 			foreach(View view in database.Views)
@@ -1014,7 +1146,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestUdts()
 		{
-			Database database = server.Databases["SEM_Merchant"];
 
 			ScriptingOptions udtOptions = new ScriptingOptions();
 			udtOptions.ToFileOnly = true;
@@ -1056,9 +1187,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestUsersAndRoles()
 		{
-			//Database database = server.Databases["SEM_Merchant"];
-			//Database database = server.Databases["Design_Datawarehouse"];
-			Database database = server.Databases["Dev_Datawarehouse"];
 
 
 			string fileName = "Roles.sql";
@@ -1121,7 +1249,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestTransferRoles()
 		{
-			Database database = server.Databases["Dev_Datawarehouse"];
 
 			string fileName = "TransferRoles.sql";
 			ScriptingOptions options = new ScriptingOptions();
@@ -1144,7 +1271,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestSchemas()
 		{
-			Database database = server.Databases["SEM_Merchant"];
 
 			string fileName = "Schemas.sql";
 			ScriptingOptions options = new ScriptingOptions();
@@ -1167,7 +1293,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestTransferSchemas()
 		{
-			Database database = server.Databases["SEM_Merchant"];
 
 			string fileName = "TransferSchemas.sql";
 			ScriptingOptions options = new ScriptingOptions();
@@ -1191,7 +1316,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestTransferSynonyms()
 		{
-			Database database = server.Databases["Dev_Merchant"];
 
 			string fileName = "TransferSynonyms.sql";
 			ScriptingOptions options = new ScriptingOptions();
@@ -1213,7 +1337,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestTransferData()
 		{
-			Database database = server.Databases["SEM_Merchant"];
 
 			string fileName = "TransferData.sql";
 			ScriptingOptions options = new ScriptingOptions();
@@ -1236,7 +1359,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestTransferPartitionFunctions()
 		{
-			Database database = server.Databases["Dev_Merchant"];
 
 			string fileName = "TransferPartitionFunctions.sql";
 			ScriptingOptions options = new ScriptingOptions();
@@ -1255,7 +1377,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestTransferPartitionSchemes()
 		{
-			Database database = server.Databases["Dev_Merchant"];
 
 			string fileName = "TransferPartitionSchemes.sql";
 			ScriptingOptions options = new ScriptingOptions();
@@ -1389,7 +1510,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestScriptDataAsInsert()
 		{
-			Database database = server.Databases["Dev_Merchant"];
 			Table table = database.Tables["AllType"];
 
 			bool hasIdentityColumn = false;
@@ -1511,7 +1631,6 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestCopyTable()
 		{
-			Database database = server.Databases["Dev_Merchant"];
 
 			database.PrefetchObjects(typeof(Table)); 
 			Table productTable = database.Tables["Product"];
@@ -1557,6 +1676,79 @@ namespace Mercent.SqlServer.Management.Tests
 			}
 		}
 
+		[Test]
+		public void TestSqlTypeFormats()
+		{
+			Assert.AreEqual("9999.00", new SqlMoney(9999m).ToString());
+			Assert.AreEqual("9999.90", new SqlMoney(9999.9m).ToString());
+			Assert.AreEqual("9999.90", new SqlMoney(9999.90m).ToString());
+			Assert.AreEqual("9999.99", new SqlMoney(9999.99m).ToString());
+			Assert.AreEqual("9999.9999", new SqlMoney(9999.9999m).ToString());
+			Assert.AreEqual("10000.00", new SqlMoney(9999.99999m).ToString());
+
+			Assert.AreEqual("9999", new SqlDecimal(9999m).ToString());
+			Assert.AreEqual("9999.9", new SqlDecimal(9999.9m).ToString());
+			Assert.AreEqual("9999.90", new SqlDecimal(9999.90m).ToString());
+			Assert.AreEqual("9999.99", new SqlDecimal(9999.99m).ToString());
+			Assert.AreEqual("3333.3333333333333333333333333", new SqlDecimal(10000m / 3m).ToString());
+
+			Assert.AreEqual("True", new SqlBoolean(true).ToString());
+			Assert.AreEqual("False", new SqlBoolean(false).ToString());
+
+			Assert.AreEqual("9999", new SqlInt32(9999).ToString());
+
+			Assert.AreEqual("9/11/2006 12:00:00 AM", new SqlDateTime(2006, 9, 11).ToString());
+			Assert.AreEqual("12/1/2006 12:00:00 AM", new SqlDateTime(2006, 12, 1).ToString());
+
+			Assert.AreEqual("99", new SqlByte(99).ToString());
+
+			Assert.AreEqual("9999", new SqlDouble(9999d).ToString());
+			Assert.AreEqual("9999.9", new SqlDouble(9999.9d).ToString());
+			Assert.AreEqual("9999.99", new SqlDouble(9999.99d).ToString());
+			Assert.AreEqual("9999.999", new SqlDouble(9999.999d).ToString());
+			Assert.AreEqual("9999.9999", new SqlDouble(9999.9999d).ToString());
+
+			Assert.AreEqual("9999", new SqlDouble(9999f).ToString());
+			Assert.AreEqual("9999.900390625", new SqlDouble(9999.9f).ToString());
+			Assert.AreEqual("9999.990234375", new SqlDouble(9999.99f).ToString());
+			Assert.AreEqual("9999.9990234375", new SqlDouble(9999.999f).ToString());
+			Assert.AreEqual("10000", new SqlDouble(9999.9999f).ToString());
+		}
+
+		[Test]
+		public void TestClrTypeFormats()
+		{
+			Assert.AreEqual("True", true.ToString());
+			Assert.AreEqual("False", false.ToString());
+
+			Assert.AreEqual("99", ((byte)99).ToString());
+
+			Assert.AreEqual("8/9/2007", new DateTime(2007, 8, 9).ToString("M/d/yyyy", DateTimeFormatInfo.InvariantInfo));
+
+			Assert.AreEqual("8/9/2007 1:02 PM", new DateTime(2007, 8, 9, 13, 2, 3).ToString("M/d/yyyy h:mm tt", DateTimeFormatInfo.InvariantInfo));
+
+			string customCurrencyFormat = "#,###.00";
+			Assert.AreEqual("9,999.00", 9999M.ToString(customCurrencyFormat, NumberFormatInfo.InvariantInfo));
+			Assert.AreEqual(".99", .99M.ToString(customCurrencyFormat, NumberFormatInfo.InvariantInfo));
+			Assert.AreEqual("99.99", 99.99M.ToString(customCurrencyFormat, NumberFormatInfo.InvariantInfo));
+			Assert.AreEqual("-9,999.99", (-9999.99M).ToString(customCurrencyFormat, NumberFormatInfo.InvariantInfo));
+
+
+			string customDecimalFormat = "#,###.####";
+			Assert.AreEqual("9,999", 9999M.ToString(customDecimalFormat, NumberFormatInfo.InvariantInfo));
+			Assert.AreEqual(".99", .99M.ToString(customDecimalFormat, NumberFormatInfo.InvariantInfo));
+			Assert.AreEqual("99.99", 99.9900M.ToString(customDecimalFormat, NumberFormatInfo.InvariantInfo));
+			Assert.AreEqual("99.999", 99.9990M.ToString(customDecimalFormat, NumberFormatInfo.InvariantInfo));
+			Assert.AreEqual("99.9999", 99.9999M.ToString(customDecimalFormat, NumberFormatInfo.InvariantInfo));
+			Assert.AreEqual("100", 99.99999M.ToString(customDecimalFormat, NumberFormatInfo.InvariantInfo));
+			Assert.AreEqual("-9,999.99", (-9999.99M).ToString(customDecimalFormat, NumberFormatInfo.InvariantInfo));
+
+
+			Assert.AreEqual("9,999", ((Int16)9999).ToString("#,###", NumberFormatInfo.InvariantInfo));
+			Assert.AreEqual("-9,999", (-(Int16)9999).ToString("#,###", NumberFormatInfo.InvariantInfo));
+
+		}
 		
 	}
 }
+

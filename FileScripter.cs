@@ -82,8 +82,7 @@ namespace Mercent.SqlServer.Management
 			ScriptTables();
 			ScriptServiceBrokerQueues();
 			ScriptServiceBrokerServices();
-			ScriptUserDefinedFunctions();
-			ScriptViews();
+			ScriptUserDefinedFunctionsAndViews();
 			ScriptStoredProcedures();
 			
 			using(StreamWriter writer = new StreamWriter(Path.Combine(OutputDirectory, "CreateDatabaseObjects.sql"), false, Encoding))
@@ -473,105 +472,45 @@ namespace Mercent.SqlServer.Management
 
 		private void ScriptUserDefinedFunctionsAndViews()
 		{
-			UrnCollection urns = new UrnCollection();
+			UrnCollection schemaBoundUrns = new UrnCollection();
+			List<string> nonSchemaBoundFileNames = new List<string>();
 
+			string functionRelativeDir = "Functions";
 			string viewRelativeDir = "Views";
-			List<string> triggerFileNames = new List<string>();
-			ScriptViews(viewRelativeDir, urns, triggerFileNames);
-
-			if (urns.Count <= 0)
-				return;
-
-			DependencyWalker walker = new DependencyWalker(server);
-			DependencyTree tree = walker.DiscoverDependencies(urns, DependencyType.Parents);
-			DependencyCollection dependencies = walker.WalkDependencies(tree);
-			foreach(DependencyCollectionNode node in dependencies)
-			{
-				// Check that the dependency is a view that we have scripted out
-				if(urns.Contains(node.Urn))
-				{
-					string filename;
-					filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".viw";
-					this.fileNames.Add(Path.Combine(viewRelativeDir, filename));
-				}
-			}
-
-			this.fileNames.AddRange(triggerFileNames);
-			ScriptUserDefinedFunctions();
-		}
-
-		private void ScriptViews(string relativeDir, UrnCollection urns, ICollection<string> triggerFileNames)
-		{
-			ScriptingOptions dropOptions = new ScriptingOptions();
-			dropOptions.Encoding = Encoding;
-			dropOptions.IncludeIfNotExists = true;
-			dropOptions.ScriptDrops = true; 
 			
-			ScriptingOptions viewOptions = new ScriptingOptions();
-			viewOptions.Encoding = Encoding;
-			viewOptions.Indexes = true;
-			viewOptions.Permissions = true;
-			viewOptions.Statistics = true;
+			ScriptUserDefinedFunctions(functionRelativeDir, schemaBoundUrns, nonSchemaBoundFileNames);
+			ScriptViews(viewRelativeDir, schemaBoundUrns, nonSchemaBoundFileNames);
 
-			Scripter viewScripter = new Scripter(server);
-			viewScripter.Options = viewOptions;
-			viewScripter.PrefetchObjects = false;
-
-			ScriptingOptions triggerOptions = new ScriptingOptions();
-			triggerOptions.Encoding = Encoding;
-			triggerOptions.PrimaryObject = false;
-			triggerOptions.Triggers = true;
-
-			Scripter triggerScripter = new Scripter(server);
-			triggerScripter.Options = triggerOptions;
-			triggerScripter.PrefetchObjects = false;
-
-			string dir = Path.Combine(OutputDirectory, relativeDir);
-			if (!Directory.Exists(dir))
-				Directory.CreateDirectory(dir);
-
-			ScriptingOptions prefetchOptions = new ScriptingOptions();
-			prefetchOptions.Indexes = true;
-			prefetchOptions.Permissions = true;
-			prefetchOptions.Statistics = true;
-			prefetchOptions.Triggers = true;
-
-			database.PrefetchObjects(typeof(View), prefetchOptions);
-			SqlSmoObject[] objects = new SqlSmoObject[1];
-			foreach (View view in database.Views)
+			// If there are any schema bound functions or views then
+			// we need to create them in dependency order.
+			if(schemaBoundUrns.Count > 0)
 			{
-				if (!view.IsSystemObject)
+				DependencyWalker walker = new DependencyWalker(server);
+				DependencyTree tree = walker.DiscoverDependencies(schemaBoundUrns, DependencyType.Parents);
+				DependencyCollection dependencies = walker.WalkDependencies(tree);
+				foreach(DependencyCollectionNode node in dependencies)
 				{
-					string filename = Path.Combine(relativeDir, view.Schema + "." + view.Name + ".viw");
-					string outputFileName = Path.Combine(OutputDirectory, filename);
-					Console.WriteLine(outputFileName);
-					using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+					// Check that the dependency is another schema bound function or view
+					if(schemaBoundUrns.Contains(node.Urn))
 					{
-						objects[0] = view;
-						viewScripter.Options = dropOptions;
-						WriteBatches(writer, viewScripter.ScriptWithList(objects));
-						viewScripter.Options = viewOptions;
-						WriteBatches(writer, viewScripter.ScriptWithList(objects));
-					}
-					urns.Add(view.Urn);
-
-					foreach(Trigger trigger in view.Triggers)
-					{
-						filename = Path.Combine(relativeDir, view.Schema + "." + trigger.Name + ".trg"); // is the trigger schema the same as the view?
-						outputFileName = Path.Combine(OutputDirectory, filename);
-						Console.WriteLine(outputFileName);
-						using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+						string filename;
+						switch(node.Urn.Type)
 						{
-							objects[0] = trigger;
-							triggerScripter.Options = dropOptions;
-							WriteBatches(writer, triggerScripter.ScriptWithList(objects));
-							triggerScripter.Options = triggerOptions;
-							WriteBatches(writer, triggerScripter.ScriptWithList(objects));
+							case "View":
+								filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".viw";
+								this.fileNames.Add(Path.Combine(viewRelativeDir, filename));
+								break;
+							case "UserDefinedFunction":
+								filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".udf";
+								this.fileNames.Add(Path.Combine(functionRelativeDir, filename));
+								break;
 						}
-						triggerFileNames.Add(filename);
 					}
 				}
 			}
+
+			// Add all non-schema bound functions and view file names after the schema bound ones
+			this.fileNames.AddRange(nonSchemaBoundFileNames);
 		}
 
 		private void ScriptViewHeaders()
@@ -620,7 +559,7 @@ namespace Mercent.SqlServer.Management
 			this.fileNames.Add(fileName);
 		}
 
-		private void ScriptViews()
+		private void ScriptViews(string relativeDir, UrnCollection schemaBoundUrns, ICollection<string> nonSchemaBoundFileNames)
 		{
 			ScriptingOptions prefetchOptions = new ScriptingOptions();
 			prefetchOptions.Indexes = true;
@@ -639,7 +578,6 @@ namespace Mercent.SqlServer.Management
 			if(views.Count == 0)
 				return;
 
-			string relativeDir = "Views";
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
@@ -647,7 +585,7 @@ namespace Mercent.SqlServer.Management
 			ScriptingOptions dropOptions = new ScriptingOptions();
 			dropOptions.Encoding = Encoding;
 			dropOptions.IncludeIfNotExists = true;
-			dropOptions.ScriptDrops = true; 
+			dropOptions.ScriptDrops = true;
 
 			ScriptingOptions viewOptions = new ScriptingOptions();
 			viewOptions.Encoding = Encoding;
@@ -685,8 +623,11 @@ namespace Mercent.SqlServer.Management
 					objects[0] = view;
 					WriteBatches(writer, viewScripter.ScriptWithList(objects));
 				}
-				this.fileNames.Add(fileName);
-				
+				if(view.IsSchemaBound)
+					schemaBoundUrns.Add(view.Urn);
+				else
+					nonSchemaBoundFileNames.Add(fileName);
+
 				foreach(Trigger trigger in view.Triggers)
 				{
 					fileName = Path.Combine(relativeDir, view.Schema + "." + trigger.Name + ".trg"); // is the trigger schema the same as the view?
@@ -700,7 +641,7 @@ namespace Mercent.SqlServer.Management
 						triggerScripter.Options = triggerOptions;
 						WriteBatches(writer, triggerScripter.ScriptWithList(objects));
 					}
-					this.fileNames.Add(fileName);
+					nonSchemaBoundFileNames.Add(fileName);
 				}
 			}
 		}
@@ -991,7 +932,7 @@ namespace Mercent.SqlServer.Management
 			this.fileNames.Add(fileName);
 		}
 
-		private void ScriptUserDefinedFunctions()
+		private void ScriptUserDefinedFunctions(string relativeDir, UrnCollection schemaBoundUrns, ICollection<string> nonSchemaBoundFileNames)
 		{
 			database.PrefetchObjects(typeof(UserDefinedFunction));
 			IList<UserDefinedFunction> udfs = new List<UserDefinedFunction>();
@@ -1006,11 +947,10 @@ namespace Mercent.SqlServer.Management
 			if(udfs.Count == 0)
 				return;
 
-			string relativeDir = "Functions";
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
-			
+
 			ScriptingOptions options = new ScriptingOptions();
 			options.Encoding = this.Encoding;
 			options.Permissions = true;
@@ -1020,7 +960,7 @@ namespace Mercent.SqlServer.Management
 			scripter.PrefetchObjects = false;
 
 			options.PrimaryObject = false;
-			
+
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 			foreach(UserDefinedFunction udf in udfs)
 			{
@@ -1037,48 +977,10 @@ namespace Mercent.SqlServer.Management
 					objects[0] = udf;
 					WriteBatches(writer, scripter.ScriptWithList(objects));
 				}
-				this.fileNames.Add(fileName);
-			}
-		}
-		
-		private void ScriptUserDefinedFunctions(string relativeDir, UrnCollection urns)
-		{
-			ScriptingOptions dropOptions = new ScriptingOptions();
-			dropOptions.Encoding = Encoding;
-			dropOptions.IncludeIfNotExists = true;
-			dropOptions.ScriptDrops = true;
-
-			ScriptingOptions options = new ScriptingOptions();
-			options.Encoding = this.Encoding;
-			options.Permissions = true;
-
-			Scripter scripter = new Scripter(server);
-			scripter.Options = options;
-			scripter.PrefetchObjects = false;
-
-			string dir = Path.Combine(OutputDirectory, relativeDir);
-			if (!Directory.Exists(dir))
-				Directory.CreateDirectory(dir);
-
-			database.PrefetchObjects(typeof(UserDefinedFunction), options);
-			SqlSmoObject[] objects = new SqlSmoObject[1];
-			foreach (UserDefinedFunction udf in database.UserDefinedFunctions)
-			{
-				if (!udf.IsSystemObject && udf.ImplementationType == ImplementationType.TransactSql)
-				{
-					string filename = Path.Combine(relativeDir, udf.Schema + "." + udf.Name + ".udf");
-					string outputFileName = Path.Combine(OutputDirectory, filename);
-					Console.WriteLine(outputFileName);
-					using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
-					{
-						objects[0] = udf;
-						scripter.Options = dropOptions;
-						WriteBatches(writer, scripter.ScriptWithList(objects));
-						scripter.Options = options;
-						WriteBatches(writer, scripter.ScriptWithList(objects));
-					}
-					urns.Add(udf.Urn);
-				}
+				if(udf.IsSchemaBound)
+					schemaBoundUrns.Add(udf.Urn);
+				else
+					nonSchemaBoundFileNames.Add(fileName);
 			}
 		}
 
@@ -1374,7 +1276,6 @@ namespace Mercent.SqlServer.Management
 		public string GetDataTypeAsString(DataType dataType)
 		{
 			StringBuilder sb = new StringBuilder();
-			sb.Append(MakeSqlBracket(dataType.Name));
 			switch(dataType.SqlDataType)
 			{
 				case SqlDataType.Binary:
@@ -1383,6 +1284,7 @@ namespace Mercent.SqlServer.Management
 				case SqlDataType.NVarChar:
 				case SqlDataType.VarBinary:
 				case SqlDataType.VarChar:
+					sb.Append(MakeSqlBracket(dataType.Name));
 					sb.Append('(');
 					sb.Append(dataType.MaximumLength);
 					sb.Append(')');
@@ -1390,11 +1292,48 @@ namespace Mercent.SqlServer.Management
 				case SqlDataType.NVarCharMax:
 				case SqlDataType.VarBinaryMax:
 				case SqlDataType.VarCharMax:
+					sb.Append(MakeSqlBracket(dataType.Name));
 					sb.Append("(max)");
 					break;
 				case SqlDataType.Decimal:
 				case SqlDataType.Numeric:
+					sb.Append(MakeSqlBracket(dataType.Name));
 					sb.AppendFormat("({0},{1})", dataType.NumericPrecision, dataType.NumericScale);
+					break;
+				case SqlDataType.UserDefinedDataType:
+					// For a user defined type, get the base data type as string
+					UserDefinedDataType uddt = database.UserDefinedDataTypes[dataType.Name, dataType.Schema];
+					SqlDataType systemType = (SqlDataType)Enum.Parse(typeof(SqlDataType), uddt.SystemType, true);
+					DataType baseDataType;
+					switch(systemType)
+					{
+						case SqlDataType.Binary:
+						case SqlDataType.Char:
+						case SqlDataType.NChar:
+						case SqlDataType.NVarChar:
+						case SqlDataType.VarBinary:
+						case SqlDataType.VarChar:
+						case SqlDataType.NVarCharMax:
+						case SqlDataType.VarBinaryMax:
+						case SqlDataType.VarCharMax:
+							baseDataType = new DataType(systemType, uddt.MaxLength);
+							break;
+						case SqlDataType.Decimal:
+						case SqlDataType.Numeric:
+							baseDataType = new DataType(systemType, uddt.NumericPrecision, uddt.NumericScale);
+							break;
+						default:
+							baseDataType = new DataType(systemType);
+							break;
+					}
+					return GetDataTypeAsString(baseDataType);
+				case SqlDataType.Xml:
+					sb.Append("[xml]");
+					if(!String.IsNullOrEmpty(dataType.Name))
+						sb.AppendFormat("({0} {1})", dataType.XmlDocumentConstraint, dataType.Name);
+					break;
+				default:
+					sb.Append(MakeSqlBracket(dataType.Name));
 					break;
 			}
 			return sb.ToString();
