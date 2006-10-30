@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Data;
 using System.Data.SqlClient;
 using System.Data.SqlTypes;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Xml;
@@ -116,7 +118,6 @@ namespace Mercent.SqlServer.Management
 			//database.PartitionSchemes;
 			//database.Rules;
 			//database.SymmetricKeys;
-			//database.Synonyms;
 			//database.Triggers;
 			//database.Users;
 
@@ -212,7 +213,6 @@ namespace Mercent.SqlServer.Management
 								if(child.Urn.Type != "SqlAssembly")
 								{
 									sortedChildren.Add(child.Urn.Value, child.Urn);
-									object sqlSmoObject = null;
 									switch(child.Urn.Type)
 									{
 										case "StoredProcedure":
@@ -221,20 +221,25 @@ namespace Mercent.SqlServer.Management
 												string sqlCommand = String.Format("SELECT parameter_id, default_value FROM {0}.sys.parameters WHERE [object_id] = {1} AND has_default_value = 1",
 												MakeSqlBracket(database.Name), procedure.ID);
 												object[] defaults = new object[procedure.Parameters.Count];
-												server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.ExecuteSql;
-												using(SqlDataReader reader = server.ConnectionContext.ExecuteReader(sqlCommand))
+												using(SqlDataReader reader = ExecuteReader(sqlCommand))
 												{
 													while(reader.Read())
 													{
-														defaults[reader.GetInt32(0) - 1] = reader.GetSqlValue(1);
+														int ordinal = reader.GetInt32(0) - 1;
+														defaults[ordinal] = reader.GetSqlValue(1);
 													}
 												}
-												server.ConnectionContext.ExecuteNonQuery("USE " + MakeSqlBracket(database.Name));
 												for(int i = 0; i < defaults.Length; i++)
 												{
 													if(defaults[i] != null)
 													{
-														procedure.Parameters[i].DefaultValue = GetSqlLiteral(defaults[i]);
+														DataType dataType = procedure.Parameters[i].DataType;
+														SqlDataType sqlDataType;
+														if(dataType.SqlDataType == SqlDataType.UserDefinedDataType)
+															sqlDataType = GetBaseSqlDataType(dataType);
+														else
+															sqlDataType = dataType.SqlDataType;
+														procedure.Parameters[i].DefaultValue = GetSqlLiteral(defaults[i], sqlDataType);
 													}
 												}
 											}
@@ -245,20 +250,25 @@ namespace Mercent.SqlServer.Management
 												string sqlCommand = String.Format("SELECT parameter_id, default_value FROM {0}.sys.parameters WHERE [object_id] = {1} AND has_default_value = 1",
 												MakeSqlBracket(database.Name), function.ID);
 												object[] defaults = new object[function.Parameters.Count];
-												server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.ExecuteSql;
-												using(SqlDataReader reader = server.ConnectionContext.ExecuteReader(sqlCommand))
+												using(SqlDataReader reader = ExecuteReader(sqlCommand))
 												{
 													while(reader.Read())
 													{
-														defaults[reader.GetInt32(0) - 1] = reader.GetSqlValue(1);
+														int ordinal = reader.GetInt32(0) - 1;
+														defaults[ordinal] = reader.GetSqlValue(1);
 													}
 												}
-												server.ConnectionContext.ExecuteNonQuery("USE " + MakeSqlBracket(database.Name));
 												for(int i = 0; i < defaults.Length; i++)
 												{
 													if(defaults[i] != null)
 													{
-														function.Parameters[i].DefaultValue = GetSqlLiteral(defaults[i]);
+														DataType dataType = function.Parameters[i].DataType;
+														SqlDataType sqlDataType;
+														if(dataType.SqlDataType == SqlDataType.UserDefinedDataType)
+															sqlDataType = GetBaseSqlDataType(dataType);
+														else
+															sqlDataType = dataType.SqlDataType;
+														function.Parameters[i].DefaultValue = GetSqlLiteral(defaults[i], sqlDataType);
 													}
 												}
 											}
@@ -421,46 +431,36 @@ namespace Mercent.SqlServer.Management
 			database.PrefetchObjects(typeof(Table), prefetchOptions);
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 
-			SQLDMO.SQLServer sqlDmoServer = new SQLDMO.SQLServerClass();
-			sqlDmoServer.LoginSecure = true;
-			sqlDmoServer.Connect(this.ServerName, null, null);
-			SQLDMO._Database sqlDmoDatabase = sqlDmoServer.Databases.Item(this.DatabaseName, null);
-			SQLDMO.Tables sqlDmoTables = sqlDmoDatabase.Tables;
-
-			SQLDMO.BulkCopy bulkCopy = new SQLDMO.BulkCopyClass();
-			bulkCopy.DataFileType = SQLDMO.SQLDMO_DATAFILE_TYPE.SQLDMODataFile_NativeFormat;
-
 			foreach (Table table in database.Tables)
 			{
 				if (!table.IsSystemObject)
 				{
 					objects[0] = table;
-					string filename = Path.Combine(relativeDir, table.Schema + "." + table.Name + ".tab");
-					tabFileNames.Add(filename);
-					string outputFileName = Path.Combine(OutputDirectory, filename);
+					string fileName = Path.Combine(relativeDir, table.Schema + "." + table.Name + ".tab");
+					tabFileNames.Add(fileName);
+					string outputFileName = Path.Combine(OutputDirectory, fileName);
 					Console.WriteLine(outputFileName);
 					WriteBatches(outputFileName, tableScripter.ScriptWithList(objects));
 
-					filename = Path.ChangeExtension(filename, ".kci");
-					kciFileNames.Add(filename);
-					outputFileName = Path.Combine(OutputDirectory, filename);
+					fileName = Path.ChangeExtension(fileName, ".kci");
+					kciFileNames.Add(fileName);
+					outputFileName = Path.Combine(OutputDirectory, fileName);
 					Console.WriteLine(outputFileName);
 					WriteBatches(outputFileName, kciScripter.ScriptWithList(objects));
 
-					filename = Path.ChangeExtension(filename, ".fky");
-					fkyFileNames.Add(filename);
-					outputFileName = Path.Combine(OutputDirectory, filename);
+					fileName = Path.ChangeExtension(fileName, ".fky");
+					fkyFileNames.Add(fileName);
+					outputFileName = Path.Combine(OutputDirectory, fileName);
 					Console.WriteLine(outputFileName);
 					WriteBatches(outputFileName, fkyScripter.ScriptWithList(objects));
 
 					if(table.RowCount > 0)
 					{
-						filename = Path.Combine(relativeDataDir, table.Schema + "." + table.Name + ".dat");
-						tabFileNames.Add(filename);
-						bulkCopy.DataFilePath = Path.Combine(OutputDirectory, filename);
-						Console.WriteLine(bulkCopy.DataFilePath);
-						SQLDMO._Table sqlDmoTable = sqlDmoTables.ItemByID(table.ID);
-						sqlDmoTable.ExportData(bulkCopy);
+						fileName = Path.Combine(relativeDataDir, table.Schema + "." + table.Name + ".sql");
+						tabFileNames.Add(fileName);
+						outputFileName = Path.Combine(OutputDirectory, fileName);
+						Console.WriteLine(outputFileName);
+						ScriptTableData(table, outputFileName);
 					}
 				}
 			}
@@ -468,6 +468,144 @@ namespace Mercent.SqlServer.Management
 			fileNames.AddRange(tabFileNames);
 			fileNames.AddRange(kciFileNames);
 			fileNames.AddRange(fkyFileNames);
+		}
+
+		private void ScriptTableData(Table table, string fileName)
+		{
+			int batchSize = 1000;
+
+			bool hasIdentityColumn = false;
+			StringBuilder selectColumnListBuilder = new StringBuilder();
+			StringBuilder insertColumnListBuilder = new StringBuilder();
+			string columnDelimiter = null;
+			IDictionary<int, SqlDataType> readerColumnsSqlDataType = new SortedList<int, SqlDataType>(table.Columns.Count);
+			int columnCount = 0;
+			int columnOrdinal;
+			foreach(Column column in table.Columns)
+			{
+				if(!column.Computed && column.DataType.SqlDataType != SqlDataType.Timestamp)
+				{
+					if(columnDelimiter != null)
+					{
+						selectColumnListBuilder.Append(columnDelimiter);
+						insertColumnListBuilder.Append(columnDelimiter);
+					}
+					else
+						columnDelimiter = ",\r\n\t";
+
+					string columnName = MakeSqlBracket(column.Name);
+					selectColumnListBuilder.Append(columnName);
+					insertColumnListBuilder.Append(columnName);
+
+					SqlDataType sqlDataType = column.DataType.SqlDataType;
+					columnOrdinal = columnCount++;
+					switch(sqlDataType)
+					{
+						case SqlDataType.UserDefinedType:
+							selectColumnListBuilder.Append(".ToString() AS ");
+							selectColumnListBuilder.Append(columnName);
+							break;
+						case SqlDataType.UserDefinedDataType:
+							sqlDataType = GetBaseSqlDataType(column.DataType);
+							break;
+						case SqlDataType.Variant:
+							selectColumnListBuilder.AppendFormat("{0}CAST(SQL_VARIANT_PROPERTY({1}, 'BaseType') AS sysname)", columnDelimiter, columnName);
+							selectColumnListBuilder.AppendFormat("{0}CAST(SQL_VARIANT_PROPERTY({1}, 'Precision') AS int)", columnDelimiter, columnName);
+							selectColumnListBuilder.AppendFormat("{0}CAST(SQL_VARIANT_PROPERTY({1}, 'Scale') AS int)", columnDelimiter, columnName);
+							selectColumnListBuilder.AppendFormat("{0}CAST(SQL_VARIANT_PROPERTY({1}, 'Collation') AS sysname)", columnDelimiter, columnName);
+							selectColumnListBuilder.AppendFormat("{0}CAST(SQL_VARIANT_PROPERTY({1}, 'MaxLength') AS int)", columnDelimiter, columnName);
+							columnCount += 5;
+							break;
+					}
+
+					readerColumnsSqlDataType[columnOrdinal] = sqlDataType;
+
+					if(column.Identity)
+						hasIdentityColumn = true;
+				}
+			}
+
+			string tableNameWithSchema = String.Format("{0}.{1}", MakeSqlBracket(table.Schema), MakeSqlBracket(table.Name));
+			string tableNameWithDatabase = String.Format("{0}.{1}", MakeSqlBracket(database.Name), tableNameWithSchema);
+			string selectColumnList = selectColumnListBuilder.ToString();
+			string insertColumnList = insertColumnListBuilder.ToString();
+			string selectClause = String.Format("SELECT\r\n\t{0}", selectColumnList);
+			string fromClause = String.Format("FROM {0}", tableNameWithDatabase);
+			string orderByClause = GetOrderByClauseForTable(table);
+			string selectCommand = String.Format("{0}\r\n{1}\r\n{2}", selectClause, fromClause, orderByClause);
+
+			using(SqlDataReader reader = ExecuteReader(selectCommand))
+			{
+				using(TextWriter writer = new StreamWriter(fileName, false, this.Encoding))
+				{
+					if(hasIdentityColumn)
+						writer.WriteLine("SET IDENTITY_INSERT {0} ON;\r\nGO", tableNameWithSchema);
+
+					object[] values = new object[reader.FieldCount];
+					int rowCount = 0;
+					while(reader.Read())
+					{
+						if(rowCount % batchSize == 0)
+						{
+							if(rowCount != 0)
+								writer.WriteLine("GO");
+							writer.Write("INSERT {0}\r\n(\r\n\t{1}\r\n)\r\nSELECT\r\n\t", tableNameWithSchema, insertColumnList);
+						}
+						else
+							writer.Write("UNION ALL SELECT\r\n\t");
+						reader.GetSqlValues(values);
+						columnDelimiter = null;
+						foreach(KeyValuePair<int, SqlDataType> readerColumnSqlDataType in readerColumnsSqlDataType)
+						{
+							int readerOrdinal = readerColumnSqlDataType.Key;
+							SqlDataType sqlDataType = readerColumnSqlDataType.Value;
+							object sqlValue = values[readerOrdinal];
+
+							if(columnDelimiter != null)
+								writer.Write(columnDelimiter);
+							else
+								columnDelimiter = ",\r\n\t";
+
+							writer.Write(MakeSqlBracket(reader.GetName(readerOrdinal)));
+							writer.Write(" = ");
+							if(sqlDataType == SqlDataType.Variant)
+							{
+								SqlString baseType = (SqlString)values[readerOrdinal + 1];
+								SqlInt32 precision = (SqlInt32)values[readerOrdinal + 2];
+								SqlInt32 scale = (SqlInt32)values[readerOrdinal + 3];
+								SqlString collation = (SqlString)values[readerOrdinal + 4];
+								SqlInt32 maxLength = (SqlInt32)values[readerOrdinal + 5];
+								writer.Write(GetSqlVariantLiteral(sqlValue, baseType, precision, scale, collation, maxLength));
+							}
+							else
+							{
+								writer.Write(GetSqlLiteral(sqlValue, sqlDataType));
+							}
+
+						}
+						writer.WriteLine();
+						rowCount++;
+					}
+					if(hasIdentityColumn)
+						writer.WriteLine("GO\r\nSET IDENTITY_INSERT {0} OFF;\r\nGO", tableNameWithSchema);
+				}
+			}
+		}
+
+		private SqlDataReader ExecuteReader(string commandText)
+		{
+			SqlConnection connection = new SqlConnection(server.ConnectionContext.ConnectionString);
+			SqlCommand command = new SqlCommand(commandText, connection);
+			connection.Open();
+			try
+			{
+				return command.ExecuteReader(CommandBehavior.CloseConnection);
+			}
+			catch(Exception)
+			{
+				connection.Close();
+				throw;
+			}
 		}
 
 		private void ScriptUserDefinedFunctionsAndViews()
@@ -714,21 +852,14 @@ namespace Mercent.SqlServer.Management
 		{
 			// Get a list of IDs for Queues that are not system queues
 			List<int> nonSystemQueueIds = new List<int>();
-			server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.ExecuteSql;
 			string sqlCommand = String.Format("select object_id from {0}.sys.service_queues WHERE is_ms_shipped = 0 ORDER BY object_id", MakeSqlBracket(database.Name));
-			using(SqlDataReader reader = server.ConnectionContext.ExecuteReader(sqlCommand))
+			using(SqlDataReader reader = ExecuteReader(sqlCommand))
 			{
 				while(reader.Read())
 				{
 					nonSystemQueueIds.Add(reader.GetInt32(0));
 				}
 			}
-
-			// After using the ConnectionContext to execute the reader above
-			// we have to change the connection back to using the correct database.
-			// This appears to be an issue/bug with SQL SMO.
-			sqlCommand = String.Format("USE {0}", MakeSqlBracket(database.Name));
-			server.ConnectionContext.ExecuteNonQuery(sqlCommand);
 
 			if(nonSystemQueueIds.Count == 0)
 				return;
@@ -1273,6 +1404,53 @@ namespace Mercent.SqlServer.Management
 			return builder.ToString();
 		}
 
+		public SqlDataType GetBaseSqlDataType(DataType dataType)
+		{
+			if(dataType.SqlDataType != SqlDataType.UserDefinedDataType)
+				return dataType.SqlDataType;
+
+			UserDefinedDataType uddt = database.UserDefinedDataTypes[dataType.Name, dataType.Schema];
+			return GetBaseSqlDataType(uddt);
+		}
+
+		public SqlDataType GetBaseSqlDataType(UserDefinedDataType uddt)
+		{
+			return (SqlDataType)Enum.Parse(typeof(SqlDataType), uddt.SystemType, true);
+		}
+
+		public DataType GetDataType(SqlDataType sqlDataType, int precision, int scale, int maxLength)
+		{
+			switch(sqlDataType)
+			{
+				case SqlDataType.Binary:
+				case SqlDataType.Char:
+				case SqlDataType.NChar:
+				case SqlDataType.NVarChar:
+				case SqlDataType.VarBinary:
+				case SqlDataType.VarChar:
+				case SqlDataType.NVarCharMax:
+				case SqlDataType.VarBinaryMax:
+				case SqlDataType.VarCharMax:
+					return new DataType(sqlDataType, maxLength);
+				case SqlDataType.Decimal:
+				case SqlDataType.Numeric:
+					return new DataType(sqlDataType, precision, scale);
+				default:
+					return new DataType(sqlDataType);
+			}
+		}
+
+		public DataType GetBaseDataType(DataType dataType)
+		{
+			if(dataType.SqlDataType != SqlDataType.UserDefinedDataType)
+				return dataType;
+
+			UserDefinedDataType uddt = database.UserDefinedDataTypes[dataType.Name, dataType.Schema];
+			SqlDataType baseSqlDataType = GetBaseSqlDataType(uddt);
+			DataType baseDataType = GetDataType(baseSqlDataType, uddt.NumericPrecision, uddt.NumericScale, uddt.MaxLength);
+			return baseDataType;
+		}
+
 		public string GetDataTypeAsString(DataType dataType)
 		{
 			StringBuilder sb = new StringBuilder();
@@ -1302,30 +1480,7 @@ namespace Mercent.SqlServer.Management
 					break;
 				case SqlDataType.UserDefinedDataType:
 					// For a user defined type, get the base data type as string
-					UserDefinedDataType uddt = database.UserDefinedDataTypes[dataType.Name, dataType.Schema];
-					SqlDataType systemType = (SqlDataType)Enum.Parse(typeof(SqlDataType), uddt.SystemType, true);
-					DataType baseDataType;
-					switch(systemType)
-					{
-						case SqlDataType.Binary:
-						case SqlDataType.Char:
-						case SqlDataType.NChar:
-						case SqlDataType.NVarChar:
-						case SqlDataType.VarBinary:
-						case SqlDataType.VarChar:
-						case SqlDataType.NVarCharMax:
-						case SqlDataType.VarBinaryMax:
-						case SqlDataType.VarCharMax:
-							baseDataType = new DataType(systemType, uddt.MaxLength);
-							break;
-						case SqlDataType.Decimal:
-						case SqlDataType.Numeric:
-							baseDataType = new DataType(systemType, uddt.NumericPrecision, uddt.NumericScale);
-							break;
-						default:
-							baseDataType = new DataType(systemType);
-							break;
-					}
+					DataType baseDataType = GetBaseDataType(dataType);
 					return GetDataTypeAsString(baseDataType);
 				case SqlDataType.Xml:
 					sb.Append("[xml]");
@@ -1339,60 +1494,176 @@ namespace Mercent.SqlServer.Management
 			return sb.ToString();
 		}
 
-		private string GetSqlLiteral(object val)
+		private string GetOrderByClauseForTable(Table table)
 		{
-			if(DBNull.Value == val || (val is INullable && ((INullable)val).IsNull))
-				return "NULL";
-			else if(val is System.Data.SqlTypes.SqlBinary)
+			Index bestIndex = null;
+			int bestRank = int.MaxValue;
+			// Find the best index to use for the order by clause.
+			// In order of priority we want to use:
+			// 1) the primary key,
+			// 2) the clustered index,
+			// 3) a unique key,
+			// or 4) a unique index
+			// There could be multiple of unique keys/indexes so we go with
+			// the one that comes first alphabetically. 
+			foreach(Index index in table.Indexes)
 			{
-				return ByteArrayToHexLiteral(((SqlBinary)val).Value);
+				int currentRank = int.MaxValue;
+				if(index.IndexKeyType == IndexKeyType.DriPrimaryKey)
+					currentRank = 1;
+				else if(index.IsClustered)
+					currentRank = 2;
+				else if(index.IndexKeyType == IndexKeyType.DriUniqueKey)
+					currentRank = 3;
+				else if(index.IsUnique)
+					currentRank = 4;
+				else if(!index.IsXmlIndex)
+					currentRank = 5;
+				if(currentRank < bestRank ||
+					(
+						currentRank == bestRank
+						&& String.Compare(index.Name, bestIndex.Name, false, CultureInfo.InvariantCulture) < 0
+					)
+				)
+				{
+					bestRank = currentRank;
+					bestIndex = index;
+				}
 			}
-			else if(val is System.Data.SqlTypes.SqlBoolean)
+
+			StringBuilder orderBy = new StringBuilder();
+			orderBy.Append("ORDER BY ");
+
+			if(bestIndex == null)
 			{
-				return ((SqlBoolean)val).Value ? "1" : "0";
-			}
-			else if(val is System.Data.SqlTypes.SqlBytes)
-			{
-				return ByteArrayToHexLiteral(((SqlBytes)val).Value);
-			}
-			else if(val is System.Data.SqlTypes.SqlChars)
-			{
-				return "'" + EscapeChar(new string(((SqlChars)val).Value), '\'') + "'";
-			}
-			else if(val is System.Data.SqlTypes.SqlDateTime)
-			{
-				return ((SqlDateTime)val).Value.ToString("'yyyy-MM-ddTHH:mm:ss.fff'");
-			}
-			else if(val is System.Data.SqlTypes.SqlDecimal
-				|| val is System.Data.SqlTypes.SqlByte
-				|| val is System.Data.SqlTypes.SqlInt16
-				|| val is System.Data.SqlTypes.SqlInt32
-				|| val is System.Data.SqlTypes.SqlInt64
-				|| val is System.Data.SqlTypes.SqlMoney)
-			{
-				return val.ToString();
-			}
-			else if(val is System.Data.SqlTypes.SqlSingle)
-			{
-				return ((SqlSingle)val).Value.ToString("r");
-			}
-			else if(val is System.Data.SqlTypes.SqlDouble)
-			{
-				return ((SqlDouble)val).Value.ToString("r");
-			}
-			else if(val is System.Data.SqlTypes.SqlGuid
-				|| val is System.Data.SqlTypes.SqlString)
-			{
-				return "'" + EscapeChar(val.ToString(), '\'') + "'";
-			}
-			else if(val is System.Data.SqlTypes.SqlXml)
-			{
-				return "'" + EscapeChar(((SqlXml)val).Value, '\'') + "'";
+				// If we didn't find an index then we sort by all non-computed columns
+				string columnDelimiter = null;
+				foreach(Column column in table.Columns)
+				{
+					if(!column.Computed)
+					{
+						if(columnDelimiter != null)
+							orderBy.Append(columnDelimiter);
+						else
+							columnDelimiter = ", ";
+						orderBy.Append(MakeSqlBracket(column.Name));
+					}
+				}
 			}
 			else
 			{
-				throw new ApplicationException("Unsupported type :" + val.GetType().ToString());
+				string columnDelimiter = null;
+				foreach(IndexedColumn indexColumn in bestIndex.IndexedColumns)
+				{
+					if(!indexColumn.IsIncluded)
+					{
+						if(columnDelimiter != null)
+							orderBy.Append(columnDelimiter);
+						else
+							columnDelimiter = ", ";
+						orderBy.Append(MakeSqlBracket(indexColumn.Name));
+						if(indexColumn.Descending)
+							orderBy.Append(" DESC");
+					}
+				}
+				// If the index isn't unique then add all the rest of the non-computed columns
+				if(!bestIndex.IsUnique)
+				{
+					foreach(Column column in table.Columns)
+					{
+						if(!column.Computed
+							&& bestIndex.IndexedColumns.Contains(column.Name)
+							&& !bestIndex.IndexedColumns[column.Name].IsIncluded)
+						{
+							orderBy.Append(columnDelimiter);
+							orderBy.Append(MakeSqlBracket(column.Name));
+						}
+					}
+				}
 			}
+			return orderBy.ToString();
+		}
+
+		private string GetSqlLiteral(object sqlValue, SqlDataType sqlDataType)
+		{
+			if(DBNull.Value == sqlValue || (sqlValue is INullable && ((INullable)sqlValue).IsNull))
+				return "NULL";
+			switch(sqlDataType)
+			{
+				case SqlDataType.BigInt:
+				case SqlDataType.Decimal:
+				case SqlDataType.Int:
+				case SqlDataType.Money:
+				case SqlDataType.Numeric:
+				case SqlDataType.SmallInt:
+				case SqlDataType.SmallMoney:
+				case SqlDataType.TinyInt:
+					return sqlValue.ToString();
+				case SqlDataType.Binary:
+				case SqlDataType.Image:
+				case SqlDataType.Timestamp:
+				case SqlDataType.VarBinary:
+				case SqlDataType.VarBinaryMax:
+					return ByteArrayToHexLiteral(((SqlBinary)sqlValue).Value);
+				case SqlDataType.Bit:
+					return ((SqlBoolean)sqlValue).Value ? "1" : "0";
+				case SqlDataType.Char:
+				case SqlDataType.Text:
+				case SqlDataType.UniqueIdentifier:
+				case SqlDataType.VarChar:
+				case SqlDataType.VarCharMax:
+					return "'" + EscapeChar(sqlValue.ToString(), '\'') + "'";
+				case SqlDataType.DateTime:
+					return "'" + ((SqlDateTime)sqlValue).Value.ToString("yyyy-MM-dd HH:mm:ss.fff", DateTimeFormatInfo.InvariantInfo) + "'";
+				case SqlDataType.NChar:
+				case SqlDataType.NText:
+				case SqlDataType.NVarChar:
+				case SqlDataType.NVarCharMax:
+				case SqlDataType.SysName:
+				case SqlDataType.UserDefinedType:
+					return "N'" + EscapeChar(sqlValue.ToString(), '\'') + "'";
+				case SqlDataType.Float:
+					return ((SqlDouble)sqlValue).Value.ToString("r");
+				case SqlDataType.Real:
+					return ((SqlSingle)sqlValue).Value.ToString("r");
+				case SqlDataType.SmallDateTime:
+					return "'" + ((SqlDateTime)sqlValue).Value.ToString("yyyy-MM-dd HH:mm", DateTimeFormatInfo.InvariantInfo) + "'";
+				case SqlDataType.Xml:
+					return "N'" + EscapeChar(((SqlXml)sqlValue).Value, '\'') + "'";
+				default:
+					throw new ApplicationException("Unsupported type :" + sqlDataType.ToString());
+			}
+		}
+
+		private string GetSqlVariantLiteral(object sqlValue, SqlString baseType, SqlInt32 precision, SqlInt32 scale, SqlString collation, SqlInt32 maxLength)
+		{
+			if(DBNull.Value == sqlValue || (sqlValue is INullable && ((INullable)sqlValue).IsNull))
+				return "NULL";
+
+			SqlDataType sqlDataType = (SqlDataType)Enum.Parse(typeof(SqlDataType), baseType.Value, true);
+			// The SQL_VARIANT_PROPERTY MaxLength is returned in bytes.
+			// For nchar and nvarchar we need to halve this to get the max length used when specifying the type.
+			// Note that I also included ntext and nvarcharmax in the case statement even though they can't be used
+			// in a sql_varaint type.
+			int adjustedMaxLength;
+			switch(sqlDataType)
+			{
+				case SqlDataType.NChar:
+				case SqlDataType.NText:
+				case SqlDataType.NVarChar:
+				case SqlDataType.NVarCharMax:
+					adjustedMaxLength = maxLength.Value / 2;
+					break;
+				default:
+					adjustedMaxLength = maxLength.Value;
+					break;
+			}
+			DataType dataType = GetDataType(sqlDataType, precision.Value, scale.Value, adjustedMaxLength);
+			string literal = "CAST(CAST(" + GetSqlLiteral(sqlValue, sqlDataType) + " AS " + GetDataTypeAsString(dataType) + ")";
+			if(!collation.IsNull)
+				literal += " COLLATE " + collation.Value;
+			literal += " AS [sql_variant])";
+			return literal;
 		}
 
 		/// <summary>
