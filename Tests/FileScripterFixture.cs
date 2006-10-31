@@ -14,10 +14,9 @@ namespace Mercent.SqlServer.Management.Tests
 		public void ScriptTest()
 		{
 			FileScripter scripter = new FileScripter();
-			scripter.OutputDirectory = "Merchant";
-			scripter.ServerName = @"splat";
-			scripter.DatabaseName = "MercentCustomer41_Design";
-			scripter.Encoding = Encoding.ASCII;
+			scripter.OutputDirectory = "Product_Merchant";
+			scripter.ServerName = @"tank";
+			scripter.DatabaseName = "Product_Merchant";
 			scripter.Script();
 		}
 	}

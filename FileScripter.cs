@@ -43,7 +43,7 @@ namespace Mercent.SqlServer.Management
 			set { outputDirectory = value; }
 		}
 
-		private Encoding encoding = Encoding.ASCII;
+		private Encoding encoding = Encoding.Default;
 		public Encoding Encoding
 		{
 			get { return encoding; }
@@ -63,8 +63,8 @@ namespace Mercent.SqlServer.Management
 			server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
 
 			database = server.Databases[databaseName];
-			server.SetDefaultInitFields(typeof(Column), true);
-			server.SetDefaultInitFields(typeof(View), new string[] {"ID", "Name", "Schema", "IsSystemObject"});
+
+			PrefetchObjects();
 
 			ScriptDatabase();
 			ScriptRoles();
@@ -80,7 +80,6 @@ namespace Mercent.SqlServer.Management
 			ScriptUserDefinedFunctionHeaders();
 			ScriptViewHeaders();
 			ScriptStoredProcedureHeaders();
-			
 			ScriptTables();
 			ScriptServiceBrokerQueues();
 			ScriptServiceBrokerServices();
@@ -139,6 +138,248 @@ namespace Mercent.SqlServer.Management
 			PromptDeleteFiles(outputDirectoryInfo, "");
 		}
 
+		private void PrefetchObjects()
+		{
+			Console.Write("Prefetching objects");
+			ScriptingOptions prefetchOptions = new ScriptingOptions();
+			prefetchOptions.AllowSystemObjects = false;
+			prefetchOptions.ClusteredIndexes = true;
+			prefetchOptions.DriChecks = true;
+			prefetchOptions.DriClustered = true;
+			prefetchOptions.DriDefaults = true;
+			prefetchOptions.DriIndexes = true;
+			prefetchOptions.DriNonClustered = true;
+			prefetchOptions.DriPrimaryKey = true;
+			prefetchOptions.DriUniqueKeys = true;
+			prefetchOptions.Indexes = true;
+			prefetchOptions.NonClusteredIndexes = true;
+			prefetchOptions.Permissions = true;
+			prefetchOptions.Statistics = true;
+			prefetchOptions.Triggers = true;
+			prefetchOptions.XmlIndexes = true;
+			prefetchOptions.DriForeignKeys = true;
+
+			database.PrefetchObjects(typeof(UserDefinedType), prefetchOptions);
+			Console.Write('.');
+
+			PrefetchRoles();
+			Console.Write('.');
+			PrefetchStoredProcedures(prefetchOptions);
+			Console.Write('.');
+			// Set the column fields to initialize.
+			// Used to prefetch view and udf columns.
+			// We manually prefetch the columns because the Database.PrefetchObjects()
+			// method does not prefetch all of the column information that we need.
+			// If we did not prefetch the columns here then it would query
+			// each column individually when we script out headers.
+			server.SetDefaultInitFields(typeof(Column),
+				"DataType",
+				"DataTypeSchema",
+				"Length",
+				"NumericPrecision",
+				"NumericScale",
+				"SystemType",
+				"Collation",
+				"XmlDocumentConstraint",
+				"XmlSchemaNamespace",
+				"XmlSchemaNamespaceSchema");
+
+			PrefetchViews(prefetchOptions);
+			Console.Write('.');
+			PrefetchUserDefinedFunctions(prefetchOptions);
+			Console.Write('.');
+			database.PrefetchObjects(typeof(PartitionFunction), prefetchOptions);
+			Console.Write('.');
+			database.PrefetchObjects(typeof(PartitionScheme), prefetchOptions);
+			Console.Write('.');
+			database.PrefetchObjects(typeof(UserDefinedAggregate), prefetchOptions);
+			Console.Write('.');
+			PrefetchTables(prefetchOptions);
+			Console.Write('.');
+			PrefetchSynonyms();
+			Console.Write('.');
+			PrefetchServiceBrokerMessageTypes();
+			Console.Write('.');
+			PrefetchServiceBrokerContracts();
+			Console.Write('.');
+			PrefetchServiceBrokerQueues();
+			Console.Write('.');
+			PrefetchServiceBrokerServices();
+			Console.Write('.');
+			PrefetchAssemblies(prefetchOptions);
+			Console.Write('.');
+			database.PrefetchObjects(typeof(XmlSchemaCollection), prefetchOptions);
+			Console.WriteLine('.');
+		}
+
+		private void PrefetchAssemblies(ScriptingOptions prefetchOptions)
+		{
+			server.SetDefaultInitFields(typeof(SqlAssembly), "AssemblySecurityLevel");
+			database.Assemblies.Refresh();
+			database.PrefetchObjects(typeof(SqlAssembly), prefetchOptions);
+		}
+
+		private void PrefetchRoles()
+		{
+			server.SetDefaultInitFields(typeof(DatabaseRole), true);
+			database.Roles.Refresh();
+		}
+
+		private void PrefetchServiceBrokerContracts()
+		{
+			server.SetDefaultInitFields(typeof(ServiceContract), true);
+			database.ServiceBroker.ServiceContracts.Refresh();
+		}
+
+		private void PrefetchServiceBrokerMessageTypes()
+		{
+			server.SetDefaultInitFields(typeof(MessageType), true);
+			database.ServiceBroker.MessageTypes.Refresh();
+		}
+
+		private void PrefetchServiceBrokerQueues()
+		{
+			server.SetDefaultInitFields(typeof(ServiceQueue), true);
+			database.ServiceBroker.Queues.Refresh();
+		}
+
+		private void PrefetchServiceBrokerServices()
+		{
+			server.SetDefaultInitFields(typeof(BrokerService), true);
+			database.ServiceBroker.Services.Refresh();
+		}
+
+		private void PrefetchStoredProcedures(ScriptingOptions prefetchOptions)
+		{
+			server.SetDefaultInitFields(typeof(StoredProcedureParameter), true);
+			server.SetDefaultInitFields(typeof(StoredProcedure), true);
+
+			foreach(StoredProcedure procedure in database.StoredProcedures)
+			{
+				if(!procedure.IsSystemObject && procedure.ImplementationType == ImplementationType.SqlClr)
+				{
+					procedure.Parameters.Refresh();
+				}
+			}
+
+			database.PrefetchObjects(typeof(StoredProcedure), prefetchOptions);
+
+			string sqlCommand = "SELECT o.[object_id], parameter_id, default_value\r\n"
+				+ "FROM " + MakeSqlBracket(database.Name) + ".sys.objects AS o\r\n"
+				+ "\tJOIN " + MakeSqlBracket(database.Name) + ".sys.parameters AS p ON p.[object_id] = o.[object_id]\r\n"
+				+ "WHERE o.is_ms_shipped = 0 AND o.type = 'PC' AND p.has_default_value = 1\r\n"
+				+ "ORDER BY o.[object_id]";
+
+			StoredProcedureCollection procedures = database.StoredProcedures;
+			using(SqlDataReader reader = ExecuteReader(sqlCommand))
+			{
+				StoredProcedure procedure = null;
+				while(reader.Read())
+				{
+					int objectId = reader.GetInt32(0);
+					int parameterId = reader.GetInt32(1);
+					object sqlValue = reader.GetSqlValue(2);
+
+					if(procedure == null || procedure.ID != objectId)
+						procedure = procedures.ItemById(objectId);
+
+					StoredProcedureParameter parameter = procedure.Parameters.ItemById(parameterId);
+					DataType dataType = parameter.DataType;
+					SqlDataType sqlDataType;
+					if(dataType.SqlDataType == SqlDataType.UserDefinedDataType)
+						sqlDataType = GetBaseSqlDataType(dataType);
+					else
+						sqlDataType = dataType.SqlDataType;
+					parameter.DefaultValue = GetSqlLiteral(sqlValue, sqlDataType);
+				}
+			}
+		}
+
+		private void PrefetchSynonyms()
+		{
+			server.SetDefaultInitFields(typeof(Synonym), true);
+			database.Synonyms.Refresh();
+		}
+
+		private void PrefetchTables(ScriptingOptions prefetchOptions)
+		{
+			server.SetDefaultInitFields(typeof(Table), "RowCount");
+			database.Tables.Refresh();
+			database.PrefetchObjects(typeof(Table), prefetchOptions);
+		}
+
+		private void PrefetchUserDefinedFunctions(ScriptingOptions prefetchOptions)
+		{
+			server.SetDefaultInitFields(typeof(UserDefinedFunctionParameter), true);
+
+			server.SetDefaultInitFields(typeof(UserDefinedFunction), true);
+
+			// Prefetch the columns for each non-system, non-scalar function.
+			// Prefetch the parameters for clr functions.
+			foreach(UserDefinedFunction function in database.UserDefinedFunctions)
+			{
+				if(!function.IsSystemObject)
+				{
+					// Prefetch the columns for scripting out udf headers
+					if(function.FunctionType != UserDefinedFunctionType.Scalar)
+						function.Columns.Refresh();
+					// Prefetch the parameters for scripting out clr functions
+					if(function.ImplementationType == ImplementationType.SqlClr)
+						function.Parameters.Refresh();
+				}
+			}
+
+			database.PrefetchObjects(typeof(UserDefinedFunction), prefetchOptions);
+
+			string sqlCommand = "SELECT o.[object_id], parameter_id, default_value\r\n"
+				+ "FROM " + MakeSqlBracket(database.Name) + ".sys.objects AS o\r\n"
+				+ "\tJOIN " + MakeSqlBracket(database.Name) + ".sys.parameters AS p ON p.[object_id] = o.[object_id]\r\n"
+				+ "WHERE o.is_ms_shipped = 0 AND o.type IN ('FN', 'FS', 'FT') AND p.has_default_value = 1\r\n"
+				+ "ORDER BY o.[object_id]";
+
+			UserDefinedFunctionCollection functions = database.UserDefinedFunctions;
+			using(SqlDataReader reader = ExecuteReader(sqlCommand))
+			{
+				UserDefinedFunction function = null;
+				while(reader.Read())
+				{
+					int objectId = reader.GetInt32(0);
+					int parameterId = reader.GetInt32(1);
+					object sqlValue = reader.GetSqlValue(2);
+
+					if(function == null || function.ID != objectId)
+						function = functions.ItemById(objectId);
+
+					UserDefinedFunctionParameter parameter = function.Parameters.ItemById(parameterId);
+					DataType dataType = parameter.DataType;
+					SqlDataType sqlDataType;
+					if(dataType.SqlDataType == SqlDataType.UserDefinedDataType)
+						sqlDataType = GetBaseSqlDataType(dataType);
+					else
+						sqlDataType = dataType.SqlDataType;
+					parameter.DefaultValue = GetSqlLiteral(sqlValue, sqlDataType);
+				}
+			}
+		}
+
+		private void PrefetchViews(ScriptingOptions prefetchOptions)
+		{
+			server.SetDefaultInitFields(typeof(View),
+				"IsSchemaBound",
+				"IsSystemObject");
+
+			// Prefetch the columns for each non-system view
+			foreach(View view in database.Views)
+			{
+				if(!view.IsSystemObject)
+				{
+					view.Columns.Refresh();
+				}
+			}
+
+			database.PrefetchObjects(typeof(View), prefetchOptions);
+		}
+
 		private void PromptDeleteFiles(DirectoryInfo dirInfo, string relativeDir)
 		{
 			string relativeName;
@@ -166,7 +407,6 @@ namespace Mercent.SqlServer.Management
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
-			database.PrefetchObjects(typeof(SqlAssembly), options);
 
 			if(database.Assemblies.Count > 0)
 			{
@@ -213,67 +453,6 @@ namespace Mercent.SqlServer.Management
 								if(child.Urn.Type != "SqlAssembly")
 								{
 									sortedChildren.Add(child.Urn.Value, child.Urn);
-									switch(child.Urn.Type)
-									{
-										case "StoredProcedure":
-											{
-												StoredProcedure procedure = database.StoredProcedures[child.Urn.GetAttribute("Name"), child.Urn.GetAttribute("Schema")];
-												string sqlCommand = String.Format("SELECT parameter_id, default_value FROM {0}.sys.parameters WHERE [object_id] = {1} AND has_default_value = 1",
-												MakeSqlBracket(database.Name), procedure.ID);
-												object[] defaults = new object[procedure.Parameters.Count];
-												using(SqlDataReader reader = ExecuteReader(sqlCommand))
-												{
-													while(reader.Read())
-													{
-														int ordinal = reader.GetInt32(0) - 1;
-														defaults[ordinal] = reader.GetSqlValue(1);
-													}
-												}
-												for(int i = 0; i < defaults.Length; i++)
-												{
-													if(defaults[i] != null)
-													{
-														DataType dataType = procedure.Parameters[i].DataType;
-														SqlDataType sqlDataType;
-														if(dataType.SqlDataType == SqlDataType.UserDefinedDataType)
-															sqlDataType = GetBaseSqlDataType(dataType);
-														else
-															sqlDataType = dataType.SqlDataType;
-														procedure.Parameters[i].DefaultValue = GetSqlLiteral(defaults[i], sqlDataType);
-													}
-												}
-											}
-											break;
-										case "UserDefinedFunction":
-											{
-												UserDefinedFunction function = database.UserDefinedFunctions[child.Urn.GetAttribute("Name"), child.Urn.GetAttribute("Schema")];
-												string sqlCommand = String.Format("SELECT parameter_id, default_value FROM {0}.sys.parameters WHERE [object_id] = {1} AND has_default_value = 1",
-												MakeSqlBracket(database.Name), function.ID);
-												object[] defaults = new object[function.Parameters.Count];
-												using(SqlDataReader reader = ExecuteReader(sqlCommand))
-												{
-													while(reader.Read())
-													{
-														int ordinal = reader.GetInt32(0) - 1;
-														defaults[ordinal] = reader.GetSqlValue(1);
-													}
-												}
-												for(int i = 0; i < defaults.Length; i++)
-												{
-													if(defaults[i] != null)
-													{
-														DataType dataType = function.Parameters[i].DataType;
-														SqlDataType sqlDataType;
-														if(dataType.SqlDataType == SqlDataType.UserDefinedDataType)
-															sqlDataType = GetBaseSqlDataType(dataType);
-														else
-															sqlDataType = dataType.SqlDataType;
-														function.Parameters[i].DefaultValue = GetSqlLiteral(defaults[i], sqlDataType);
-													}
-												}
-											}
-											break;
-									}
 								}
 							}
 							// script out the dependent objects, appending to the file
@@ -411,24 +590,6 @@ namespace Mercent.SqlServer.Management
 			List<string> kciFileNames = new List<string>();
 			List<string> fkyFileNames = new List<string>();
 
-			ScriptingOptions prefetchOptions = new ScriptingOptions();
-			prefetchOptions.ClusteredIndexes = true;
-			prefetchOptions.DriChecks = true;
-			prefetchOptions.DriClustered = true;
-			prefetchOptions.DriDefaults = true;
-			prefetchOptions.DriIndexes = true;
-			prefetchOptions.DriNonClustered = true;
-			prefetchOptions.DriPrimaryKey = true;
-			prefetchOptions.DriUniqueKeys = true;
-			prefetchOptions.Indexes = true;
-			prefetchOptions.NonClusteredIndexes = true;
-			prefetchOptions.Permissions = true;
-			prefetchOptions.Statistics = true;
-			prefetchOptions.Triggers = true;
-			prefetchOptions.XmlIndexes = true;
-			prefetchOptions.DriForeignKeys = true;
-
-			database.PrefetchObjects(typeof(Table), prefetchOptions);
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 
 			foreach (Table table in database.Tables)
@@ -699,13 +860,6 @@ namespace Mercent.SqlServer.Management
 
 		private void ScriptViews(string relativeDir, UrnCollection schemaBoundUrns, ICollection<string> nonSchemaBoundFileNames)
 		{
-			ScriptingOptions prefetchOptions = new ScriptingOptions();
-			prefetchOptions.Indexes = true;
-			prefetchOptions.Permissions = true;
-			prefetchOptions.Statistics = true;
-			prefetchOptions.Triggers = true;
-
-			database.PrefetchObjects(typeof(View), prefetchOptions);
 			IList<View> views = new List<View>();
 			foreach(View view in database.Views)
 			{
@@ -812,6 +966,7 @@ namespace Mercent.SqlServer.Management
 			options.Encoding = this.Encoding;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
+			scripter.PrefetchObjects = false;
 			scripter.ScriptWithList(urns);
 			this.fileNames.Add(fileName);
 		}
@@ -844,6 +999,7 @@ namespace Mercent.SqlServer.Management
 			options.Encoding = this.Encoding;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
+			scripter.PrefetchObjects = false;
 			scripter.ScriptWithList(urns);
 			this.fileNames.Add(fileName);
 		}
@@ -887,6 +1043,7 @@ namespace Mercent.SqlServer.Management
 			options.Encoding = this.Encoding;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
+			scripter.PrefetchObjects = false;
 			scripter.ScriptWithList(urns);
 			this.fileNames.Add(fileName);
 		}
@@ -920,6 +1077,7 @@ namespace Mercent.SqlServer.Management
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			scripter.ScriptWithList(urns);
+			scripter.PrefetchObjects = false;
 			this.fileNames.Add(fileName);
 		}
 
@@ -963,7 +1121,6 @@ namespace Mercent.SqlServer.Management
 			ScriptingOptions options = new ScriptingOptions();
 			options.Permissions = true;
 
-			database.PrefetchObjects(typeof(StoredProcedure), options);
 			IList<StoredProcedure> sprocs = new List<StoredProcedure>();
 			foreach(StoredProcedure sproc in database.StoredProcedures)
 			{
@@ -1005,7 +1162,6 @@ namespace Mercent.SqlServer.Management
 
 		private void ScriptUserDefinedFunctionHeaders()
 		{
-			//database.PrefetchObjects(typeof(UserDefinedFunction));
 			IList<UserDefinedFunction> udfs = new List<UserDefinedFunction>();
 			foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
 			{
@@ -1065,7 +1221,6 @@ namespace Mercent.SqlServer.Management
 
 		private void ScriptUserDefinedFunctions(string relativeDir, UrnCollection schemaBoundUrns, ICollection<string> nonSchemaBoundFileNames)
 		{
-			database.PrefetchObjects(typeof(UserDefinedFunction));
 			IList<UserDefinedFunction> udfs = new List<UserDefinedFunction>();
 			foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
 			{
@@ -1171,6 +1326,17 @@ namespace Mercent.SqlServer.Management
 		
 		private void ScriptRoles()
 		{
+			UrnCollection urns = new UrnCollection();
+
+			foreach(DatabaseRole role in database.Roles)
+			{
+				if(!role.IsFixedRole)
+					urns.Add(role.Urn);
+			}
+
+			if(urns.Count == 0)
+				return;
+
 			string fileName = "Roles.sql";
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = Path.Combine(this.OutputDirectory, fileName);
@@ -1182,11 +1348,10 @@ namespace Mercent.SqlServer.Management
 
 			Console.WriteLine(options.FileName);
 
-			Transfer transfer = new Transfer(database);
-			transfer.Options = options;
-			transfer.CopyAllObjects = false;
-			transfer.CopyAllRoles = true;
-			transfer.ScriptTransfer();
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			scripter.PrefetchObjects = false;
+			scripter.ScriptWithList(urns);
 
 			// script out role membership (only members that are roles)
 			using(TextWriter writer = new StreamWriter(Path.Combine(this.OutputDirectory, fileName), true, Encoding))
@@ -1225,6 +1390,18 @@ namespace Mercent.SqlServer.Management
 
 		private void ScriptSchemas()
 		{
+			UrnCollection urns = new UrnCollection();
+			foreach(Schema schema in database.Schemas)
+			{
+				// Get user schemas - note the check on ID was taken from the
+				// Transfer.GetObjectList() method using reflection.
+				if(schema.ID > 4 && (schema.ID < 0x4000 || schema.ID >= 0x4010))
+					urns.Add(schema.Urn);
+			}
+
+			if(urns.Count == 0)
+				return;
+
 			string fileName = "Schemas.sql";
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = Path.Combine(OutputDirectory, fileName);
@@ -1236,11 +1413,11 @@ namespace Mercent.SqlServer.Management
 
 			Console.WriteLine(options.FileName);
 
-			Transfer transfer = new Transfer(database);
-			transfer.Options = options;
-			transfer.CopyAllObjects = false;
-			transfer.CopyAllSchemas = true;
-			transfer.ScriptTransfer();
+			Scripter scripter = new Scripter(server);
+			scripter.Options = options;
+			scripter.PrefetchObjects = false;
+			scripter.ScriptWithList(urns);
+			
 			this.fileNames.Add(fileName);
 		}
 
@@ -1259,11 +1436,14 @@ namespace Mercent.SqlServer.Management
 
 				Console.WriteLine(options.FileName);
 
-				Transfer transfer = new Transfer(database);
-				transfer.Options = options;
-				transfer.CopyAllObjects = false;
-				transfer.CopyAllSynonyms = true;
-				transfer.ScriptTransfer();
+				Synonym[] synonyms = new Synonym[database.Synonyms.Count];
+				database.Synonyms.CopyTo(synonyms, 0);
+
+				Scripter scripter = new Scripter(server);
+				scripter.Options = options;
+				scripter.PrefetchObjects = false;
+				scripter.ScriptWithList(synonyms);
+				
 				this.fileNames.Add(fileName);
 			}
 		}
@@ -1311,8 +1491,6 @@ namespace Mercent.SqlServer.Management
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
-
-			database.PrefetchObjects(typeof(XmlSchemaCollection));
 
 			StringBuilder sb = new StringBuilder();
 
