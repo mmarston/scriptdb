@@ -7,6 +7,7 @@ using System.Data.SqlClient;
 using System.Data.SqlTypes;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using System.Xml;
 
@@ -26,8 +27,22 @@ namespace Mercent.SqlServer.Management.Tests
 		[SetUp]
 		public void SetUp()
 		{
-			server = new Server(@"tank");
-			database = server.Databases["Product_Merchant"];
+			server = new Server(@"marston");
+			server.SetDefaultInitFields
+			(
+				typeof(FullTextCatalog),
+				new string[]
+				{
+					"IsAccentSensitive",
+					"IsDefault"
+				}
+			);
+			StringCollection strings = server.GetPropertyNames(typeof(FullTextCatalog));
+			foreach(string s in strings)
+			{
+				Console.WriteLine(s);
+			}
+			database = server.Databases["TestDB"];
 			//server = new Server(@"tank");
 			//server.SetDefaultInitFields(typeof(StoredProcedure), "IsSystemObject");
 			//server.SetDefaultInitFields(typeof(UserDefinedFunction), "IsSystemObject");
@@ -73,6 +88,7 @@ namespace Mercent.SqlServer.Management.Tests
 		[Test]
 		public void TestDatabase()
 		{
+			
 			//server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
 			//database.Rename("$(NEW_DB_NAME)");
 			////server.ConnectionContext.CapturedSql.Clear();
@@ -88,8 +104,13 @@ namespace Mercent.SqlServer.Management.Tests
 			options.NoFileGroup = true;
 			options.FileName = "database.sql";
 			options.IncludeIfNotExists = true;
+			options.FullTextCatalogs = true;
+
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
+			string newDbName = "$(DBNAME)";
+			typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, database, new string[] { newDbName }, null);
+
 			scripter.Script(new SqlSmoObject[] { database });
 		}
 
@@ -114,6 +135,7 @@ namespace Mercent.SqlServer.Management.Tests
 			//server.SetDefaultInitFields(typeof(SqlAssembly), true);
 			//server.SetDefaultInitFields(true);
 			//database.PrefetchObjects(typeof(StoredProcedure), assemblyOptions);
+			
 			database.PrefetchObjects(typeof(UserDefinedAggregate), assemblyOptions);
 			database.PrefetchObjects(typeof(UserDefinedFunction), assemblyOptions);
 			database.PrefetchObjects(typeof(UserDefinedType), assemblyOptions);
@@ -175,13 +197,15 @@ namespace Mercent.SqlServer.Management.Tests
 			options.ToFileOnly = true;
 			options.FileName = "TransferDatabase.sql";
 			Transfer transfer = new Transfer(database);
-			transfer.CreateTargetDatabase = true;
-			transfer.DestinationDatabase = "$(NEW_DB_NAME)";
 			transfer.Options = options;
 			transfer.PrefetchObjects = false;
 			transfer.ObjectList = new ArrayList();
 			transfer.ObjectList.Add(database);
 			transfer.CopyAllObjects = false;
+			//transfer.CopySchema = true;
+			transfer.DestinationServer = "marston";
+			transfer.CreateTargetDatabase = true;
+			transfer.DestinationDatabase = "NEW_DB_NAME";
 			transfer.ScriptTransfer();
 		}
 
@@ -250,6 +274,7 @@ namespace Mercent.SqlServer.Management.Tests
 			kciOptions.DriNonClustered = true;
 			kciOptions.DriPrimaryKey = true;
 			kciOptions.DriUniqueKeys = true;
+			kciOptions.FullTextIndexes = true;
 			kciOptions.Indexes = true;
 			kciOptions.NonClusteredIndexes = true;
 			kciOptions.Permissions = true;
@@ -283,6 +308,7 @@ namespace Mercent.SqlServer.Management.Tests
 			prefetchOptions.DriNonClustered = true;
 			prefetchOptions.DriPrimaryKey = true;
 			prefetchOptions.DriUniqueKeys = true;
+			prefetchOptions.FullTextIndexes = true;
 			prefetchOptions.Indexes = true;
 			prefetchOptions.NonClusteredIndexes = true;
 			prefetchOptions.Permissions = true;

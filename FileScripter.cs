@@ -6,6 +6,7 @@ using System.Data.SqlClient;
 using System.Data.SqlTypes;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using System.Xml;
 
@@ -21,6 +22,8 @@ namespace Mercent.SqlServer.Management
 		private Dictionary<string, string> fileDictionary;
 		private Server server;
 		private Database database;
+
+		private static readonly string DBName = "$(DBNAME)";
 		
 		private string serverName;
 		public string ServerName
@@ -99,7 +102,7 @@ namespace Mercent.SqlServer.Management
 						string[] tableParts = Path.GetFileNameWithoutExtension(fileName).Split(new char[]{'.'});
 						string schemaName = tableParts[0];
 						string tableName = tableParts[1];
-						writer.WriteLine("!!bcp \"[$(DBNAME)].[{0}].[{1}]\" in \"{2}\" -S $(SQLCMDSERVER) -T -n -k -E", schemaName, tableName, fileName);
+						writer.WriteLine("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -n -k -E", FileScripter.DBName, schemaName, tableName, fileName);
 					}
 					else
 					{
@@ -112,9 +115,6 @@ namespace Mercent.SqlServer.Management
 			//database.AsymmetricKeys;
 			//database.Certificates;
 			//database.ExtendedStoredProcedures;
-			//database.FullTextCatalogs;
-			//database.PartitionFunctions;
-			//database.PartitionSchemes;
 			//database.Rules;
 			//database.SymmetricKeys;
 			//database.Triggers;
@@ -151,6 +151,7 @@ namespace Mercent.SqlServer.Management
 			prefetchOptions.DriNonClustered = true;
 			prefetchOptions.DriPrimaryKey = true;
 			prefetchOptions.DriUniqueKeys = true;
+			prefetchOptions.FullTextIndexes = true;
 			prefetchOptions.Indexes = true;
 			prefetchOptions.NonClusteredIndexes = true;
 			prefetchOptions.Permissions = true;
@@ -163,6 +164,8 @@ namespace Mercent.SqlServer.Management
 			Console.Write('.');
 
 			PrefetchRoles();
+			Console.Write('.');
+			PrefetchFullTextCatalogs();
 			Console.Write('.');
 			PrefetchStoredProcedures(prefetchOptions);
 			Console.Write('.');
@@ -217,6 +220,33 @@ namespace Mercent.SqlServer.Management
 			server.SetDefaultInitFields(typeof(SqlAssembly), "AssemblySecurityLevel");
 			database.Assemblies.Refresh();
 			database.PrefetchObjects(typeof(SqlAssembly), prefetchOptions);
+		}
+
+		private void PrefetchFullTextCatalogs()
+		{
+			server.SetDefaultInitFields
+			(
+				typeof(FullTextCatalog),
+				new string[]
+				{
+					"IsAccentSensitive",
+					"IsDefault"
+				}
+			);
+			database.FullTextCatalogs.Refresh();
+			if(database.FullTextCatalogs.Count > 0)
+			{
+				string[] setScriptNameParams = new string[1];
+				foreach(FullTextCatalog fullTextCatalog in database.FullTextCatalogs)
+				{
+					string scriptName = GetFullTextCatalogScriptName(fullTextCatalog.Name);
+					if(scriptName != fullTextCatalog.Name)
+					{
+						setScriptNameParams[0] = scriptName;
+						typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, fullTextCatalog, setScriptNameParams, null);
+					}
+				}
+			}
 		}
 
 		private void PrefetchRoles()
@@ -498,9 +528,14 @@ namespace Mercent.SqlServer.Management
 		private void ScriptDatabase()
 		{
 			string fileName = "Database.sql";
+			string outputFileName = Path.Combine(this.OutputDirectory, fileName);
 			ScriptingOptions options = new ScriptingOptions();
-			//options.Permissions = true;
+			options.FileName = outputFileName;
+			options.ToFileOnly = true;
+			options.Encoding = this.Encoding;
+			
 			options.AllowSystemObjects = false;
+			options.FullTextCatalogs = true;
 			options.IncludeIfNotExists = true;
 			options.NoFileGroup = true;
 
@@ -508,24 +543,18 @@ namespace Mercent.SqlServer.Management
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 
-			Console.WriteLine(Path.Combine(this.OutputDirectory, fileName));
+			Console.WriteLine(outputFileName);
 
-			StringCollection batches = scripter.ScriptWithList(new SqlSmoObject[] { database });
-			string oldName = database.Name;
-			string oldNameIdentifier = "[" + oldName + "]";
-			string oldNameLiteral = "N'" + oldName + "'";
-			string newName = "$(DBNAME)";
-			string newNameIdentifier = "[" + newName + "]";
-			string newNameLiteral = "N'" + newName + "'";
-			
-			using(TextWriter writer = new StreamWriter(Path.Combine(this.OutputDirectory, fileName), false, Encoding))
+			// Set the value of the internal ScriptName property used when scripting the database.
+			// This the same property that the Transfer object sets to create the destination database.
+			// The alternative (which I had previously used) was to go through the script and replace
+			// the old database name with the new database name.
+			typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, database, new string[] { FileScripter.DBName }, null);
+
+			scripter.ScriptWithList(new SqlSmoObject[] { database });
+			using(TextWriter writer = new StreamWriter(outputFileName, true, Encoding))
 			{
-				foreach(string batch in batches)
-				{
-					writer.WriteLine(batch.Replace(oldNameIdentifier, newNameIdentifier).Replace(oldNameLiteral, newNameLiteral));
-					writer.WriteLine("GO");
-				}
-				writer.WriteLine("USE " + newNameIdentifier);
+				writer.WriteLine("USE [{0}]", FileScripter.DBName);
 				writer.WriteLine("GO");
 			}
 			this.fileNames.Add(fileName);
@@ -554,6 +583,7 @@ namespace Mercent.SqlServer.Management
 			kciOptions.DriNonClustered = true;
 			kciOptions.DriPrimaryKey = true;
 			kciOptions.DriUniqueKeys = true;
+			kciOptions.FullTextIndexes = true;
 			kciOptions.Indexes = true;
 			kciOptions.NonClusteredIndexes = true;
 			kciOptions.Permissions = true;
@@ -596,6 +626,13 @@ namespace Mercent.SqlServer.Management
 			{
 				if (!table.IsSystemObject)
 				{
+					FullTextIndex fullTextIndex = table.FullTextIndex;
+					if(fullTextIndex != null)
+					{
+						string newCatalogName = GetFullTextCatalogScriptName(fullTextIndex.CatalogName);
+						if(newCatalogName != fullTextIndex.CatalogName)
+							fullTextIndex.CatalogName = newCatalogName; 
+					}
 					objects[0] = table;
 					string fileName = Path.Combine(relativeDir, table.Schema + "." + table.Name + ".tab");
 					tabFileNames.Add(fileName);
@@ -1565,6 +1602,22 @@ namespace Mercent.SqlServer.Management
 		public static string EscapeChar(string s, char c)
 		{
 			return s.Replace(new string(c, 1), new string(c, 2));
+		}
+
+		/// <summary>
+		/// Gets the name of the full text catalog to use in the create script.
+		/// </summary>
+		/// <remarks>
+		/// If the name of the full text catalog starts with the name of the database then
+		/// the name of the full text catalog will be scripted out so that the old database
+		/// name is replaced with the new database name.
+		/// </remarks>
+		public string GetFullTextCatalogScriptName(string fullTextCatalogName)
+		{
+			if(fullTextCatalogName != null && fullTextCatalogName.StartsWith(this.database.Name))
+				return FileScripter.DBName + fullTextCatalogName.Substring(database.Name.Length);
+			else
+				return fullTextCatalogName;
 		}
 
 		public static string ByteArrayToHexLiteral(byte[] a)
