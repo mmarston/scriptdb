@@ -234,19 +234,6 @@ namespace Mercent.SqlServer.Management
 				}
 			);
 			database.FullTextCatalogs.Refresh();
-			if(database.FullTextCatalogs.Count > 0)
-			{
-				string[] setScriptNameParams = new string[1];
-				foreach(FullTextCatalog fullTextCatalog in database.FullTextCatalogs)
-				{
-					string scriptName = GetFullTextCatalogScriptName(fullTextCatalog.Name);
-					if(scriptName != fullTextCatalog.Name)
-					{
-						setScriptNameParams[0] = scriptName;
-						typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, fullTextCatalog, setScriptNameParams, null);
-					}
-				}
-			}
 		}
 
 		private void PrefetchRoles()
@@ -626,13 +613,6 @@ namespace Mercent.SqlServer.Management
 			{
 				if (!table.IsSystemObject)
 				{
-					FullTextIndex fullTextIndex = table.FullTextIndex;
-					if(fullTextIndex != null)
-					{
-						string newCatalogName = GetFullTextCatalogScriptName(fullTextIndex.CatalogName);
-						if(newCatalogName != fullTextIndex.CatalogName)
-							fullTextIndex.CatalogName = newCatalogName; 
-					}
 					objects[0] = table;
 					string fileName = Path.Combine(relativeDir, table.Schema + "." + table.Name + ".tab");
 					tabFileNames.Add(fileName);
