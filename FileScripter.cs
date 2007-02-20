@@ -898,6 +898,7 @@ namespace Mercent.SqlServer.Management
 
 			ScriptingOptions viewOptions = new ScriptingOptions();
 			viewOptions.Encoding = Encoding;
+			viewOptions.FullTextIndexes = true;
 			viewOptions.Indexes = true;
 			viewOptions.Permissions = true;
 			viewOptions.Statistics = true;
