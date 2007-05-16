@@ -60,11 +60,19 @@ namespace Mercent.SqlServer.Management
 
 			fileNames.Clear();
 			
-			server = new Server(ServerName);
+			// When using the Server(string serverName) constructor some things
+			// don't work correct. In particular, some things (such as DatabaseRole.EnumRoles())
+			// incorrectly query the master database (or whatever the default database is for the login)
+			// rather than querying the correct database.
+			// Explicitly setting the database that we want to use avoids this problem.
+			SqlConnectionInfo connectionInfo = new SqlConnectionInfo();
+			connectionInfo.ServerName = ServerName;
+			connectionInfo.DatabaseName = DatabaseName;
+			ServerConnection connection = new ServerConnection(connectionInfo);
+			server = new Server(connection);
 			// Set the execution mode to capture SQL (this is like saving the script
 			// when editing sql objects in Management Studio).
-			server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
-
+			
 			database = server.Databases[databaseName];
 
 			PrefetchObjects();
@@ -427,87 +435,97 @@ namespace Mercent.SqlServer.Management
 
 			if(database.Assemblies.Count > 0)
 			{
-				string relativeDir = "Assemblies";
-				string dir = Path.Combine(OutputDirectory, relativeDir);
-				if(!Directory.Exists(dir))
-					Directory.CreateDirectory(dir);
-
-				UrnCollection assemblies = new UrnCollection();
-
-				SqlSmoObject[] objects = new SqlSmoObject[1];
-				DependencyTree tree;
-				foreach(SqlAssembly assembly in database.Assemblies)
+				SqlExecutionModes previousModes = server.ConnectionContext.SqlExecutionModes;
+				try
 				{
-					// It doesn't seem to script AssemblySecurityLevel unless it has been accessed first!
-					AssemblySecurityLevel securityLevel = assembly.AssemblySecurityLevel;
+					server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
 
-					string filename = Path.Combine(relativeDir, assembly.Name + ".sql");
-					options.FileName = Path.Combine(OutputDirectory, filename);
-					scripter.Options.AppendToFile = false;
-					objects[0] = assembly;
-					
-					Console.WriteLine(options.FileName);
-					scripter.ScriptWithList(objects);
-					// Check if the assembly is visible.
-					// If the assembly is visible then it can have CLR objects.
-					// If the assembly is not visible then it is intended to be called from
-					// other assemblies.
-					if(assembly.IsVisible)
+					string relativeDir = "Assemblies";
+					string dir = Path.Combine(OutputDirectory, relativeDir);
+					if(!Directory.Exists(dir))
+						Directory.CreateDirectory(dir);
+
+					UrnCollection assemblies = new UrnCollection();
+
+					SqlSmoObject[] objects = new SqlSmoObject[1];
+					DependencyTree tree;
+					foreach(SqlAssembly assembly in database.Assemblies)
 					{
-						tree = scripter.DiscoverDependencies(objects, DependencyType.Children);
-						
-						// tree.FirstChild is the assembly and tree.FirstChild.FirstChild is the first dependent object
-						if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
+						// It doesn't seem to script AssemblySecurityLevel unless it has been accessed first!
+						AssemblySecurityLevel securityLevel = assembly.AssemblySecurityLevel;
+
+						string filename = Path.Combine(relativeDir, assembly.Name + ".sql");
+						options.FileName = Path.Combine(OutputDirectory, filename);
+						scripter.Options.AppendToFile = false;
+						objects[0] = assembly;
+
+						Console.WriteLine(options.FileName);
+						scripter.ScriptWithList(objects);
+						// Check if the assembly is visible.
+						// If the assembly is visible then it can have CLR objects.
+						// If the assembly is not visible then it is intended to be called from
+						// other assemblies.
+						if(assembly.IsVisible)
 						{
-							IDictionary<string, Urn> sortedChildren = new SortedDictionary<string, Urn>(StringComparer.InvariantCultureIgnoreCase);
-							// loop through the children, which should be the SQL CLR objects such
-							// as user defined functions, user defined types, etc.
-							for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
+							tree = scripter.DiscoverDependencies(objects, DependencyType.Children);
+
+							// tree.FirstChild is the assembly and tree.FirstChild.FirstChild is the first dependent object
+							if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
 							{
-								// Make sure the object isn't another SqlAssembly that depends on this assembly
-								// because we don't want to include the script for the other assembly in the 
-								// script for this assembly
-								if(child.Urn.Type != "SqlAssembly")
+								IDictionary<string, Urn> sortedChildren = new SortedDictionary<string, Urn>(StringComparer.InvariantCultureIgnoreCase);
+								// loop through the children, which should be the SQL CLR objects such
+								// as user defined functions, user defined types, etc.
+								for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
 								{
-									sortedChildren.Add(child.Urn.Value, child.Urn);
+									// Make sure the object isn't another SqlAssembly that depends on this assembly
+									// because we don't want to include the script for the other assembly in the 
+									// script for this assembly
+									if(child.Urn.Type != "SqlAssembly")
+									{
+										sortedChildren.Add(child.Urn.Value, child.Urn);
+									}
 								}
+								// script out the dependent objects, appending to the file
+								scripter.Options.AppendToFile = true;
+								Urn[] children = new Urn[sortedChildren.Count];
+								sortedChildren.Values.CopyTo(children, 0);
+								scripter.ScriptWithList(children);
 							}
-							// script out the dependent objects, appending to the file
-							scripter.Options.AppendToFile = true;
-							Urn[] children = new Urn[sortedChildren.Count];
-							sortedChildren.Values.CopyTo(children, 0);
-							scripter.ScriptWithList(children);
+						}
+						else
+						{
+							// The create script doesn't include VISIBILITY (this appears
+							// to be a bug in SQL SMO) here we reset it and call Alter()
+							// to generate an alter statement.
+							assembly.IsVisible = true;
+							assembly.IsVisible = false;
+							server.ConnectionContext.CapturedSql.Clear();
+							assembly.Alter();
+							StringCollection batches = server.ConnectionContext.CapturedSql.Text;
+							// Remove the first string, which is a USE statement to set the database context
+							batches.RemoveAt(0);
+							WriteBatches(options.FileName, true, batches);
+						}
+						assemblies.Add(assembly.Urn);
+					}
+
+					// Determine proper order of assemblies based on dependencies
+					DependencyWalker walker = new DependencyWalker(server);
+					tree = walker.DiscoverDependencies(assemblies, DependencyType.Parents);
+					DependencyCollection dependencies = walker.WalkDependencies(tree);
+					foreach(DependencyCollectionNode node in dependencies)
+					{
+						// Check that the dependency is an assembly that we have scripted out
+						if(assemblies.Contains(node.Urn) && node.Urn.Type == "SqlAssembly")
+						{
+							string fileName = node.Urn.GetAttribute("Name") + ".sql";
+							this.fileNames.Add(Path.Combine(relativeDir, fileName));
 						}
 					}
-					else
-					{
-						// The create script doesn't include VISIBILITY (this appears
-						// to be a bug in SQL SMO) here we reset it and call Alter()
-						// to generate an alter statement.
-						assembly.IsVisible = true;
-						assembly.IsVisible = false;
-						server.ConnectionContext.CapturedSql.Clear();
-						assembly.Alter();
-						StringCollection batches = server.ConnectionContext.CapturedSql.Text;
-						// Remove the first string, which is a USE statement to set the database context
-						batches.RemoveAt(0);
-						WriteBatches(options.FileName, true, batches);
-					}
-					assemblies.Add(assembly.Urn);
 				}
-
-				// Determine proper order of assemblies based on dependencies
-				DependencyWalker walker = new DependencyWalker(server);
-				tree = walker.DiscoverDependencies(assemblies, DependencyType.Parents);
-				DependencyCollection dependencies = walker.WalkDependencies(tree);
-				foreach(DependencyCollectionNode node in dependencies)
+				finally
 				{
-					// Check that the dependency is an assembly that we have scripted out
-					if(assemblies.Contains(node.Urn) && node.Urn.Type == "SqlAssembly")
-					{
-						string fileName = node.Urn.GetAttribute("Name") + ".sql";
-						this.fileNames.Add(Path.Combine(relativeDir, fileName));
-					}
+					server.ConnectionContext.SqlExecutionModes = previousModes;
 				}
 			}
 		}
@@ -1374,31 +1392,38 @@ namespace Mercent.SqlServer.Management
 			// script out role membership (only members that are roles)
 			using(TextWriter writer = new StreamWriter(Path.Combine(this.OutputDirectory, fileName), true, Encoding))
 			{
+				Type databaseRoleType = typeof(DatabaseRole);
+				MethodInfo scriptAddToRoleMethod = databaseRoleType.GetMethod("ScriptAddToRole", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(string), typeof(ScriptingOptions) }, null);
 				foreach(DatabaseRole role in database.Roles)
 				{
-					bool memberAdded = false;
-					server.ConnectionContext.CapturedSql.Clear();
-					foreach(string member in role.EnumMembers())
+					// We only want to script out members that are roles.
+					// For some reason role.EnumRoles() throws an exception here.
+					// So use role.EnumMembers() and then check that the member is a role.
+					foreach(string member in role.EnumRoles())
 					{
 						if(database.Roles.Contains(member))
 						{
-							role.AddMember(member); // call AddMember so that we can script it out
-							memberAdded = true;
+							writer.Write("EXEC ");
+							writer.WriteLine(scriptAddToRoleMethod.Invoke(role, new object[]{member, options}));
+							writer.WriteLine("GO");
 						}
 					}
-					if(memberAdded)
+				}
+				// Script out database permissions (e.g. GRANT CREATE TABLE TO ...)
+				// I haven't found a way to script out just the permissions using public
+				// methods so here I use reflection to call the method that scripts permissions.
+				StringCollection permissionScript = new StringCollection();
+				Type databaseType = typeof(Database);
+				
+				databaseType.InvokeMember("AddScriptPermission", BindingFlags.Instance | BindingFlags.InvokeMethod | BindingFlags.NonPublic, null, database, new object[] { permissionScript, options });
+				foreach(string permission in permissionScript)
+				{
+					// Write out the permission as long as it isn't a grant/deny connect permission.
+					// Connect permissions only apply to users and we don't script out users.
+					if(!(permission.StartsWith("GRANT CONNECT TO") || permission.StartsWith("DENY CONNECT TO")))
 					{
-						// Alter() will script out the the results of calling AddMember.
-						role.Alter();
-						StringCollection batchesWithUse = server.ConnectionContext.CapturedSql.Text;
-						// Create a new collection without the USE statements that set the database context
-						StringCollection batchesWithoutUse = new StringCollection();
-						foreach(string batch in batchesWithUse)
-						{
-							if(!batch.StartsWith("USE "))
-								batchesWithoutUse.Add(batch);
-						}
-						WriteBatches(writer, batchesWithoutUse);
+						writer.WriteLine(permission);
+						writer.WriteLine("GO");
 					}
 				}
 			}
@@ -1841,7 +1866,26 @@ namespace Mercent.SqlServer.Management
 				case SqlDataType.SmallDateTime:
 					return "'" + ((SqlDateTime)sqlValue).Value.ToString("yyyy-MM-dd HH:mm", DateTimeFormatInfo.InvariantInfo) + "'";
 				case SqlDataType.Xml:
-					return "N'" + EscapeChar(((SqlXml)sqlValue).Value, '\'') + "'";
+					XmlWriterSettings settings = new XmlWriterSettings();
+					settings.OmitXmlDeclaration = true;
+					settings.Indent = true;
+					settings.IndentChars = "\t";
+					settings.NewLineOnAttributes = true;
+					using(XmlReader xmlReader = ((SqlXml)sqlValue).CreateReader())
+					{
+						using(StringWriter stringWriter = new StringWriter())
+						{
+							using(XmlWriter xmlWriter = XmlWriter.Create(stringWriter, settings))
+							{
+								while(xmlReader.Read())
+								{
+									xmlWriter.WriteNode(xmlReader, false);
+								}
+							}
+							return "N'" + EscapeChar(stringWriter.ToString(), '\'') + "'";
+						}
+					}
+					
 				default:
 					throw new ApplicationException("Unsupported type :" + sqlDataType.ToString());
 			}

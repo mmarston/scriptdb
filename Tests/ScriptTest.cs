@@ -27,7 +27,11 @@ namespace Mercent.SqlServer.Management.Tests
 		[SetUp]
 		public void SetUp()
 		{
-			server = new Server(@"marston");
+			SqlConnectionInfo connectionInfo = new SqlConnectionInfo();
+			connectionInfo.ServerName = "Tank";
+			connectionInfo.DatabaseName = "Product_Admin";
+			ServerConnection connection = new ServerConnection(connectionInfo);
+			server = new Server(connection);
 			server.SetDefaultInitFields
 			(
 				typeof(FullTextCatalog),
@@ -37,12 +41,12 @@ namespace Mercent.SqlServer.Management.Tests
 					"IsDefault"
 				}
 			);
-			StringCollection strings = server.GetPropertyNames(typeof(FullTextCatalog));
+			StringCollection strings = server.GetPropertyNames(typeof(DatabaseRole));
 			foreach(string s in strings)
 			{
 				Console.WriteLine(s);
 			}
-			database = server.Databases["TestDB"];
+			database = server.Databases[connection.DatabaseName];
 			//server = new Server(@"tank");
 			//server.SetDefaultInitFields(typeof(StoredProcedure), "IsSystemObject");
 			//server.SetDefaultInitFields(typeof(UserDefinedFunction), "IsSystemObject");
@@ -105,6 +109,10 @@ namespace Mercent.SqlServer.Management.Tests
 			options.FileName = "database.sql";
 			options.IncludeIfNotExists = true;
 			options.FullTextCatalogs = true;
+			//options.Permissions = true;
+			//options.PrimaryObject = false;
+			DatabasePermissionInfo[] permissions = database.EnumDatabasePermissions("zirconium_service");
+
 
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -1441,58 +1449,80 @@ namespace Mercent.SqlServer.Management.Tests
 			options.FileName = fileName;
 			options.ToFileOnly = true;
 			options.Encoding = System.Text.Encoding.UTF8;
-			options.Permissions = true;
-			options.AllowSystemObjects = true;
+			//options.Permissions = true;
+			//options.AllowSystemObjects = true;
 			options.IncludeIfNotExists = true;
-
+			options.IncludeDatabaseRoleMemberships = true;
+			
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
-			server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
+
+			//server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
 			//database.PrefetchObjects(typeof(DatabaseRole));
-			server.SetDefaultInitFields(typeof(DatabaseRole), "Members");
+			//server.SetDefaultInitFields(typeof(DatabaseRole), "Members");
+
 			
-
 			List<SqlSmoObject> roleList = new List<SqlSmoObject>();
-			foreach (DatabaseRole role in database.Roles)
+			foreach(DatabaseRole role in database.Roles)
 			{
-				//if (!role.IsFixedRole)
+				if(!role.IsFixedRole)
+				{
 					roleList.Add(role);
-					foreach(string member in role.EnumMembers())
-					{
-						if(database.Roles.Contains(member))
-						{
-							role.AddMember(member);
-							foreach(string line in role.Script())
-							{
-								Console.WriteLine(line);
-							}
-							role.Alter();
-							Console.WriteLine("sp_addrolemember N'{0}', N'{1}'", role.Name.Replace("'", "''"), member.Replace("'", "''"));
-							Console.WriteLine("GO");
-						}
-					}
-			}
+					//foreach(string member in role.EnumMembers())
+					//{
 
-			Console.WriteLine(server.ConnectionContext.CapturedSql.ToString());
-
-			foreach (ApplicationRole role in database.ApplicationRoles)
-			{
-				roleList.Add(role);
+					//    //if(database.Roles.Contains(member))
+					//    //{
+					//    //    role.AddMember(member);
+					//    //    foreach(string line in role.Script())
+					//    //    {
+					//    //        Console.WriteLine(line);
+					//    //    }
+					//    //    role.Alter();
+					//    Console.WriteLine("sp_addrolemember N'{0}', N'{1}'", role.Name.Replace("'", "''"), member.Replace("'", "''"));
+					//    //    Console.WriteLine("GO");
+					//    //}
+					//}
+				}
 			}
+			
+			//Console.WriteLine(server.ConnectionContext.CapturedSql.ToString());
 
-			foreach (User user in database.Users)
-			{
-				if (!user.IsSystemObject)
-					roleList.Add(user);
-			}
+			//foreach (ApplicationRole role in database.ApplicationRoles)
+			//{
+			//    roleList.Add(role);
+			//}
+
+			//foreach (User user in database.Users)
+			//{
+			//    if (!user.IsSystemObject)
+			//        roleList.Add(user);
+			//}
 
 			SqlSmoObject[] roles = new SqlSmoObject[roleList.Count];
 			roleList.CopyTo(roles);
 			
-			//DatabaseRole[] roles = new DatabaseRole[database.Roles.Count];
-			//database.Roles.CopyTo(roles, 0);
-
+			
 			scripter.Script(roles);
+
+			//options.IncludeDatabaseRoleMemberships = true;
+			//options.PrimaryObject = false;
+			//options.IncludeIfNotExists = false;
+			//options.AppendToFile = true;
+			//scripter.Script(roles);
+			StringCollection permissionScript = new StringCollection();
+			Type databaseType = typeof(Database);
+			options.Permissions = true;
+
+			databaseType.InvokeMember("AddScriptPermission", BindingFlags.Instance | BindingFlags.InvokeMethod | BindingFlags.NonPublic, null, database, new object[] { permissionScript, options });
+			using(TextWriter writer = new StreamWriter("Roles.sql", true))
+			{
+				foreach(string line in permissionScript)
+				{
+					writer.WriteLine(line);
+				}
+			}
+			
 		}
 
 		[Test]
@@ -1507,6 +1537,8 @@ namespace Mercent.SqlServer.Management.Tests
 			options.Permissions = true;
 			options.AllowSystemObjects = false;
 			options.IncludeIfNotExists = true;
+			options.IncludeDatabaseRoleMemberships = true;
+			options.WithDependencies = true;
 
 			Transfer transfer = new Transfer(database);
 			transfer.Options = options;
