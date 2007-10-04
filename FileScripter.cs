@@ -557,8 +557,22 @@ namespace Mercent.SqlServer.Management
 			typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, database, new string[] { FileScripter.DBName }, null);
 
 			scripter.ScriptWithList(new SqlSmoObject[] { database });
+			SqlCommand command = new SqlCommand
+			(
+				"SELECT @isReadCommittedSnapshotOn = is_read_committed_snapshot_on\n"
+				+ "FROM sys.databases\n"
+				+ "WHERE database_id = @databaseID;"
+			);
+			SqlParameterCollection parameters = command.Parameters;
+			parameters.AddWithValue("@databaseID", database.ID);
+			SqlParameter isReadCommittedSnapshotOnParameter = parameters.Add("@isReadCommittedSnapshotOn", SqlDbType.Bit);
+			isReadCommittedSnapshotOnParameter.Direction = ParameterDirection.Output;
+			ExecuteNonQuery(command);
+			bool isReadCommittedSnapshotOn = (bool)isReadCommittedSnapshotOnParameter.Value;
 			using(TextWriter writer = new StreamWriter(outputFileName, true, Encoding))
 			{
+				writer.WriteLine("ALTER DATABASE [{0}] SET READ_COMMITTED_SNAPSHOT {1}", FileScripter.DBName, (isReadCommittedSnapshotOn ? "ON" : "OFF"));
+				writer.WriteLine("GO");
 				writer.WriteLine("USE [{0}]", FileScripter.DBName);
 				writer.WriteLine("GO");
 			}
@@ -801,6 +815,28 @@ namespace Mercent.SqlServer.Management
 			{
 				connection.Close();
 				throw;
+			}
+		}
+
+		/// <summary>
+		/// Executes the command on the server.
+		/// </summary>
+		/// <remarks>
+		/// This method takes care of setting, opening, and closing the connection.
+		/// </remarks>
+		private int ExecuteNonQuery(SqlCommand command)
+		{
+			SqlConnection connection = new SqlConnection(server.ConnectionContext.ConnectionString);
+			command.Connection = connection;
+			connection.Open();
+			try
+			{
+				return command.ExecuteNonQuery();
+			}
+			finally
+			{
+				connection.Close();
+				command.Connection = null;
 			}
 		}
 
