@@ -14,6 +14,7 @@ using System.Xml;
 using Microsoft.SqlServer.Management.Smo;
 using Microsoft.SqlServer.Management.Smo.Broker;
 using Microsoft.SqlServer.Management.Common;
+using Microsoft.SqlServer.Management.Sdk.Sfc;
 using NUnit.Framework;
 
 namespace Mercent.SqlServer.Management.Tests

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Diagnostics;
 using System.Data;
 using System.Data.SqlClient;
 using System.Data.SqlTypes;
@@ -13,6 +14,7 @@ using System.Xml;
 using Microsoft.SqlServer.Management.Smo;
 using Microsoft.SqlServer.Management.Smo.Broker;
 using Microsoft.SqlServer.Management.Common;
+using Microsoft.SqlServer.Management.Sdk.Sfc;
 
 namespace Mercent.SqlServer.Management
 {
@@ -664,7 +666,16 @@ namespace Mercent.SqlServer.Management
 					Console.WriteLine(outputFileName);
 					WriteBatches(outputFileName, fkyScripter.ScriptWithList(objects));
 
-					if(table.RowCount > 0)
+					// If the table has more than 50,000 rows then we will use BCP.
+					if(table.RowCount > 50000)
+					{
+						fileName = Path.Combine(relativeDataDir, table.Schema + "." + table.Name + ".dat");
+						tabFileNames.Add(fileName);
+						outputFileName = Path.Combine(OutputDirectory, fileName);
+						Console.WriteLine(outputFileName);
+						BulkCopyTableData(table, outputFileName);
+					}
+					else if(table.RowCount > 0)
 					{
 						fileName = Path.Combine(relativeDataDir, table.Schema + "." + table.Name + ".sql");
 						tabFileNames.Add(fileName);
@@ -682,7 +693,9 @@ namespace Mercent.SqlServer.Management
 
 		private void ScriptTableData(Table table, string fileName)
 		{
-			int batchSize = 1000;
+			int maxBatchSize = 1000;
+			int divisor = 255;
+			int remainder = 7;
 
 			bool hasIdentityColumn = false;
 			StringBuilder selectColumnListBuilder = new StringBuilder();
@@ -691,6 +704,16 @@ namespace Mercent.SqlServer.Management
 			IDictionary<int, SqlDataType> readerColumnsSqlDataType = new SortedList<int, SqlDataType>(table.Columns.Count);
 			int columnCount = 0;
 			int columnOrdinal;
+			// We compute the checksum so that we somewhat randomly break the data into batches.
+			// The same rows of data (assuming the data in the row hasn't changed) will generate
+			// the same checksum so the breaks in the batches will be at the same place each time.
+			// Previously we just inserted breaks in batches based on batch size. That resulted in
+			// the undesired effect that when one row is added, deleted, or moved, the boundary
+			// for all subsequent batches changes, causing numerous other lines of data to be changed.
+			// The new process using the checksum is more friendly to source control.
+			string checksumColumnList;
+			string orderByClause = GetOrderByClauseForTable(table, out checksumColumnList);
+			selectColumnListBuilder.AppendFormat("BINARY_CHECKSUM({0}),\r\n\t", checksumColumnList);
 			foreach(Column column in table.Columns)
 			{
 				if(!column.Computed && column.DataType.SqlDataType != SqlDataType.Timestamp)
@@ -708,7 +731,7 @@ namespace Mercent.SqlServer.Management
 					insertColumnListBuilder.Append(columnName);
 
 					SqlDataType sqlDataType = column.DataType.SqlDataType;
-					columnOrdinal = columnCount++;
+					columnOrdinal = ++columnCount;
 					switch(sqlDataType)
 					{
 						case SqlDataType.UserDefinedType:
@@ -741,7 +764,6 @@ namespace Mercent.SqlServer.Management
 			string insertColumnList = insertColumnListBuilder.ToString();
 			string selectClause = String.Format("SELECT\r\n\t{0}", selectColumnList);
 			string fromClause = String.Format("FROM {0}", tableNameWithDatabase);
-			string orderByClause = GetOrderByClauseForTable(table);
 			string selectCommand = String.Format("{0}\r\n{1}\r\n{2}", selectClause, fromClause, orderByClause);
 
 			using(SqlDataReader reader = ExecuteReader(selectCommand))
@@ -752,12 +774,19 @@ namespace Mercent.SqlServer.Management
 						writer.WriteLine("SET IDENTITY_INSERT {0} ON;\r\nGO", tableNameWithSchema);
 
 					object[] values = new object[reader.FieldCount];
+					bool isFirstBatch = true;
 					int rowCount = 0;
 					while(reader.Read())
 					{
-						if(rowCount % batchSize == 0)
+						int checksum = reader.GetInt32(0);
+						if(checksum % divisor == remainder || rowCount % maxBatchSize == 0)
 						{
-							if(rowCount != 0)
+							// Reset rowCount for the start of a new batch.
+							rowCount = 0;
+							// If this isn't the first batch then we want to output "GO" to separate the batches.
+							if(isFirstBatch)
+								isFirstBatch = false;
+							else
 								writer.WriteLine("GO");
 							writer.Write("INSERT {0}\r\n(\r\n\t{1}\r\n)\r\nSELECT\r\n\t", tableNameWithSchema, insertColumnList);
 						}
@@ -800,6 +829,45 @@ namespace Mercent.SqlServer.Management
 						writer.WriteLine("GO\r\nSET IDENTITY_INSERT {0} OFF;\r\nGO", tableNameWithSchema);
 				}
 			}
+		}
+
+		private void BulkCopyTableData(Table table, string fileName)
+		{
+			// bcp [database].[schema].[table] out filename -S servername -T -n
+			string bcpArguments = String.Format
+			(
+				"\"{0}.{1}.{2}\" out \"{3}\" -S {4} -T -n",
+				MakeSqlBracket(this.DatabaseName),
+				MakeSqlBracket(table.Schema),
+				MakeSqlBracket(table.Name),
+				fileName,
+				this.ServerName
+			);
+
+			ProcessStartInfo bcpStartInfo = new ProcessStartInfo("bcp.exe", bcpArguments);
+			bcpStartInfo.CreateNoWindow = true;
+			bcpStartInfo.UseShellExecute = false;
+			bcpStartInfo.RedirectStandardError = true;
+			bcpStartInfo.RedirectStandardOutput = true;
+
+			Process bcpProcess = new Process();
+			bcpProcess.StartInfo = bcpStartInfo;
+			bcpProcess.OutputDataReceived += new DataReceivedEventHandler(bcpProcess_OutputDataReceived);
+			bcpProcess.ErrorDataReceived += new DataReceivedEventHandler(bcpProcess_ErrorDataReceived);
+			bcpProcess.Start();
+			bcpProcess.BeginErrorReadLine();
+			bcpProcess.BeginOutputReadLine();
+			bcpProcess.WaitForExit();
+		}
+
+		void bcpProcess_ErrorDataReceived(object sender, DataReceivedEventArgs e)
+		{
+			Console.Error.WriteLine(e.Data);
+		}
+
+		void bcpProcess_OutputDataReceived(object sender, DataReceivedEventArgs e)
+		{
+			Console.Out.WriteLine(e.Data);
 		}
 
 		private SqlDataReader ExecuteReader(string commandText)
@@ -1767,7 +1835,7 @@ namespace Mercent.SqlServer.Management
 			return sb.ToString();
 		}
 
-		private string GetOrderByClauseForTable(Table table)
+		private string GetOrderByClauseForTable(Table table, out string checksumColumnList)
 		{
 			Index bestIndex = null;
 			int bestRank = int.MaxValue;
@@ -1822,23 +1890,32 @@ namespace Mercent.SqlServer.Management
 						orderBy.Append(MakeSqlBracket(column.Name));
 					}
 				}
+				// Checksum over all columns
+				checksumColumnList = "*";
 			}
 			else
 			{
+				StringBuilder checksumColumnBuilder = new StringBuilder();
 				string columnDelimiter = null;
 				foreach(IndexedColumn indexColumn in bestIndex.IndexedColumns)
 				{
 					if(!indexColumn.IsIncluded)
 					{
 						if(columnDelimiter != null)
+						{
 							orderBy.Append(columnDelimiter);
+							checksumColumnBuilder.Append(columnDelimiter);
+						}
 						else
 							columnDelimiter = ", ";
-						orderBy.Append(MakeSqlBracket(indexColumn.Name));
+						string bracketedColumnName = MakeSqlBracket(indexColumn.Name);
+						orderBy.Append(bracketedColumnName);
+						checksumColumnBuilder.Append(bracketedColumnName);
 						if(indexColumn.Descending)
 							orderBy.Append(" DESC");
 					}
 				}
+				checksumColumnList = checksumColumnBuilder.ToString();
 				// If the index isn't unique then add all the rest of the non-computed columns
 				if(!bestIndex.IsUnique)
 				{
