@@ -30,7 +30,7 @@ namespace Mercent.SqlServer.Management.Tests
 		{
 			SqlConnectionInfo connectionInfo = new SqlConnectionInfo();
 			connectionInfo.ServerName = "Tank";
-			connectionInfo.DatabaseName = "Product_Admin";
+			connectionInfo.DatabaseName = "Product_DataWarehouse";
 			ServerConnection connection = new ServerConnection(connectionInfo);
 			server = new Server(connection);
 			server.SetDefaultInitFields
@@ -53,6 +53,22 @@ namespace Mercent.SqlServer.Management.Tests
 			//server.SetDefaultInitFields(typeof(UserDefinedFunction), "IsSystemObject");
 			//server.SetDefaultInitFields(typeof(View), true);
 			//server.SetDefaultInitFields(typeof(Table), true);
+
+			//server.SetDefaultInitFields
+			//(
+			//    typeof(PartitionFunction),
+			//    "RangeType",
+			//    "Name",
+			//    "ID",
+			//    "CreateDate",
+			//    "NumberOfPartitions"
+			//);
+			//PartitionFunctionCollection partitionFunctions = database.PartitionFunctions;
+			//ScriptingOptions options = new ScriptingOptions();
+			//options.WithDependencies = false;
+			//options.PrimaryObject = true;
+			//options.ExtendedProperties = false;
+			//database.PrefetchObjects(typeof(PartitionFunction), options);
 		}
 
 		[Test]
@@ -1650,10 +1666,19 @@ namespace Mercent.SqlServer.Management.Tests
 			options.AllowSystemObjects = false;
 
 			Transfer transfer = new Transfer(database);
+			transfer.PrefetchObjects = false;
 			transfer.Options = options;
 			transfer.CopyAllObjects = false;
 			transfer.CopyAllPartitionFunctions = true;
 			transfer.ScriptTransfer();
+
+			//Scripter scripter = new Scripter(server);
+			//scripter.Options = options;
+
+			//PartitionFunction[] partitionFunctions = new PartitionFunction[database.PartitionFunctions.Count];
+			//database.PartitionFunctions.CopyTo(partitionFunctions, 0);
+
+			//scripter.Script(partitionFunctions);
 		}
 
 		[Test]

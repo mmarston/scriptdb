@@ -201,8 +201,8 @@ namespace Mercent.SqlServer.Management
 			Console.Write('.');
 			PrefetchUserDefinedFunctions(prefetchOptions);
 			Console.Write('.');
-			database.PrefetchObjects(typeof(PartitionFunction), prefetchOptions);
-			Console.Write('.');
+			// Prefetching PartitionFunctions didn't help with SMO 2008.
+			// Actually it wouldn't script out whether the range was LEFT or RIGHT (PartitionFunction.RangeType).
 			database.PrefetchObjects(typeof(PartitionScheme), prefetchOptions);
 			Console.Write('.');
 			database.PrefetchObjects(typeof(UserDefinedAggregate), prefetchOptions);
@@ -559,22 +559,8 @@ namespace Mercent.SqlServer.Management
 			typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, database, new string[] { FileScripter.DBName }, null);
 
 			scripter.ScriptWithList(new SqlSmoObject[] { database });
-			SqlCommand command = new SqlCommand
-			(
-				"SELECT @isReadCommittedSnapshotOn = is_read_committed_snapshot_on\n"
-				+ "FROM sys.databases\n"
-				+ "WHERE database_id = @databaseID;"
-			);
-			SqlParameterCollection parameters = command.Parameters;
-			parameters.AddWithValue("@databaseID", database.ID);
-			SqlParameter isReadCommittedSnapshotOnParameter = parameters.Add("@isReadCommittedSnapshotOn", SqlDbType.Bit);
-			isReadCommittedSnapshotOnParameter.Direction = ParameterDirection.Output;
-			ExecuteNonQuery(command);
-			bool isReadCommittedSnapshotOn = (bool)isReadCommittedSnapshotOnParameter.Value;
 			using(TextWriter writer = new StreamWriter(outputFileName, true, Encoding))
 			{
-				writer.WriteLine("ALTER DATABASE [{0}] SET READ_COMMITTED_SNAPSHOT {1}", FileScripter.DBName, (isReadCommittedSnapshotOn ? "ON" : "OFF"));
-				writer.WriteLine("GO");
 				writer.WriteLine("USE [{0}]", FileScripter.DBName);
 				writer.WriteLine("GO");
 			}
@@ -694,8 +680,8 @@ namespace Mercent.SqlServer.Management
 		private void ScriptTableData(Table table, string fileName)
 		{
 			int maxBatchSize = 1000;
-			int divisor = 255;
-			int remainder = 7;
+			int divisor = 511;
+			int remainder = 510;
 
 			bool hasIdentityColumn = false;
 			StringBuilder selectColumnListBuilder = new StringBuilder();
@@ -713,7 +699,7 @@ namespace Mercent.SqlServer.Management
 			// The new process using the checksum is more friendly to source control.
 			string checksumColumnList;
 			string orderByClause = GetOrderByClauseForTable(table, out checksumColumnList);
-			selectColumnListBuilder.AppendFormat("BINARY_CHECKSUM({0}),\r\n\t", checksumColumnList);
+			selectColumnListBuilder.AppendFormat("ABS(BINARY_CHECKSUM({0})),\r\n\t", checksumColumnList);
 			foreach(Column column in table.Columns)
 			{
 				if(!column.Computed && column.DataType.SqlDataType != SqlDataType.Timestamp)
@@ -1428,11 +1414,12 @@ namespace Mercent.SqlServer.Management
 				
 				Console.WriteLine(options.FileName);
 
-				Transfer transfer = new Transfer(database);
-				transfer.Options = options;
-				transfer.CopyAllObjects = false;
-				transfer.CopyAllPartitionFunctions = true;
-				transfer.ScriptTransfer();
+				Scripter scripter = new Scripter(server);
+				scripter.Options = options;
+				PartitionFunction[] partitionFunctions = new PartitionFunction[database.PartitionFunctions.Count];
+				database.PartitionFunctions.CopyTo(partitionFunctions, 0);
+				scripter.Script(partitionFunctions);
+
 				this.fileNames.Add(fileName);
 			}
 		}
