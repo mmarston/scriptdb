@@ -53,7 +53,33 @@ namespace Mercent.SqlServer.Management
 		{
 			get { return encoding; }
 			set { encoding = value; }
-		}	
+		}
+
+		private SqlServerVersion targetServerVersion = SqlServerVersion.Version100;
+		public SqlServerVersion TargetServerVersion
+		{
+			get { return targetServerVersion; }
+			set { targetServerVersion = value; }
+		}
+
+		/// <summary>
+		/// Gets the SqlServerVersion for the specified CompatibilityLevel.
+		/// </summary>
+		private SqlServerVersion GetSqlServerVersion(CompatibilityLevel compatibilityLevel)
+		{
+			switch(compatibilityLevel)
+			{
+				case CompatibilityLevel.Version100:
+					return SqlServerVersion.Version100;
+				// If the compatibility level is 90 (2005) then we target version 90
+				case CompatibilityLevel.Version90:
+					return SqlServerVersion.Version90;
+				// If the compatibility level is 80 (2000) or less then we target version 80.
+				// The SMO 2008 doesn't support targeting versions earlier than 80.
+				default:
+					return SqlServerVersion.Version80;
+			}
+		}
 
 		public void Script()
 		{
@@ -76,6 +102,7 @@ namespace Mercent.SqlServer.Management
 			// when editing sql objects in Management Studio).
 			
 			database = server.Databases[databaseName];
+			targetServerVersion = GetSqlServerVersion(database.CompatibilityLevel);
 
 			PrefetchObjects();
 
@@ -169,6 +196,7 @@ namespace Mercent.SqlServer.Management
 			prefetchOptions.Triggers = true;
 			prefetchOptions.XmlIndexes = true;
 			prefetchOptions.DriForeignKeys = true;
+			prefetchOptions.TargetServerVersion = this.TargetServerVersion;
 
 			database.PrefetchObjects(typeof(UserDefinedType), prefetchOptions);
 			Console.Write('.');
@@ -227,9 +255,15 @@ namespace Mercent.SqlServer.Management
 
 		private void PrefetchAssemblies(ScriptingOptions prefetchOptions)
 		{
-			server.SetDefaultInitFields(typeof(SqlAssembly), "AssemblySecurityLevel");
+			// This fetches all non-collection properties of all assemblies at once
+			// so that when we script out the assemblies it doesn't have to query
+			// these properties for each assembly.
+			server.SetDefaultInitFields(typeof(SqlAssembly), true);
 			database.Assemblies.Refresh();
+			// In addition, this fetches the permissions for all assemblies at once.
 			database.PrefetchObjects(typeof(SqlAssembly), prefetchOptions);
+			// When scripting assemblies it still queries for assembly files and dependencies
+			// for each assembly.
 		}
 
 		private void PrefetchFullTextCatalogs()
@@ -430,6 +464,7 @@ namespace Mercent.SqlServer.Management
 			options.AppendToFile = false;
 			options.Encoding = this.Encoding;
 			options.Permissions = true;
+			options.TargetServerVersion = this.TargetServerVersion;
 			
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -453,8 +488,8 @@ namespace Mercent.SqlServer.Management
 					DependencyTree tree;
 					foreach(SqlAssembly assembly in database.Assemblies)
 					{
-						// It doesn't seem to script AssemblySecurityLevel unless it has been accessed first!
-						AssemblySecurityLevel securityLevel = assembly.AssemblySecurityLevel;
+						if(assembly.IsSystemObject)
+							continue;
 
 						string filename = Path.Combine(relativeDir, assembly.Name + ".sql");
 						options.FileName = Path.Combine(OutputDirectory, filename);
@@ -540,6 +575,7 @@ namespace Mercent.SqlServer.Management
 			options.FileName = outputFileName;
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
+			options.TargetServerVersion = this.TargetServerVersion;
 			
 			options.AllowSystemObjects = false;
 			options.FullTextCatalogs = true;
@@ -571,6 +607,7 @@ namespace Mercent.SqlServer.Management
 		{
 			ScriptingOptions tableOptions = new ScriptingOptions();
 			tableOptions.Encoding = this.Encoding;
+			tableOptions.TargetServerVersion = this.TargetServerVersion;
 
 			Scripter tableScripter = new Scripter(server);
 			tableScripter.Options = tableOptions;
@@ -597,6 +634,7 @@ namespace Mercent.SqlServer.Management
 			kciOptions.Statistics = true;
 			kciOptions.Triggers = true;
 			kciOptions.XmlIndexes = true;
+			kciOptions.TargetServerVersion = this.TargetServerVersion;
 
 			Scripter kciScripter = new Scripter(server);
 			kciScripter.Options = kciOptions;
@@ -608,6 +646,7 @@ namespace Mercent.SqlServer.Management
 			fkyOptions.DriIncludeSystemNames = true;
 			fkyOptions.PrimaryObject = false;
 			fkyOptions.SchemaQualifyForeignKeysReferences = true;
+			fkyOptions.TargetServerVersion = this.TargetServerVersion;
 
 			Scripter fkyScripter = new Scripter(server);
 			fkyScripter.Options = fkyOptions;
@@ -1003,6 +1042,7 @@ namespace Mercent.SqlServer.Management
 			dropOptions.Encoding = Encoding;
 			dropOptions.IncludeIfNotExists = true;
 			dropOptions.ScriptDrops = true;
+			dropOptions.TargetServerVersion = targetServerVersion;
 
 			ScriptingOptions viewOptions = new ScriptingOptions();
 			viewOptions.Encoding = Encoding;
@@ -1011,6 +1051,7 @@ namespace Mercent.SqlServer.Management
 			viewOptions.Permissions = true;
 			viewOptions.Statistics = true;
 			viewOptions.PrimaryObject = false;
+			viewOptions.TargetServerVersion = targetServerVersion;
 
 			Scripter viewScripter = new Scripter(server);
 			viewScripter.Options = viewOptions;
@@ -1020,6 +1061,7 @@ namespace Mercent.SqlServer.Management
 			triggerOptions.Encoding = Encoding;
 			triggerOptions.PrimaryObject = false;
 			triggerOptions.Triggers = true;
+			triggerOptions.TargetServerVersion = targetServerVersion;
 
 			Scripter triggerScripter = new Scripter(server);
 			triggerScripter.Options = triggerOptions;
@@ -1090,6 +1132,7 @@ namespace Mercent.SqlServer.Management
 			options.FileName = Path.Combine(OutputDirectory, fileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
+			options.TargetServerVersion = targetServerVersion;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
@@ -1123,6 +1166,7 @@ namespace Mercent.SqlServer.Management
 			Console.WriteLine(options.FileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
+			options.TargetServerVersion = targetServerVersion;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
@@ -1167,6 +1211,7 @@ namespace Mercent.SqlServer.Management
 			Console.WriteLine(options.FileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
+			options.TargetServerVersion = this.TargetServerVersion;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
@@ -1200,6 +1245,7 @@ namespace Mercent.SqlServer.Management
 			Console.WriteLine(options.FileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
+			options.TargetServerVersion = this.TargetServerVersion;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			scripter.ScriptWithList(urns);
@@ -1243,9 +1289,11 @@ namespace Mercent.SqlServer.Management
 			ScriptingOptions dropOptions = new ScriptingOptions();
 			dropOptions.IncludeIfNotExists = true;
 			dropOptions.ScriptDrops = true;
+			dropOptions.TargetServerVersion = this.TargetServerVersion;
 			
 			ScriptingOptions options = new ScriptingOptions();
 			options.Permissions = true;
+			options.TargetServerVersion = this.TargetServerVersion;
 
 			IList<StoredProcedure> sprocs = new List<StoredProcedure>();
 			foreach(StoredProcedure sproc in database.StoredProcedures)
@@ -1366,6 +1414,7 @@ namespace Mercent.SqlServer.Management
 			ScriptingOptions options = new ScriptingOptions();
 			options.Encoding = this.Encoding;
 			options.Permissions = true;
+			options.TargetServerVersion = this.TargetServerVersion;
 
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -1411,6 +1460,7 @@ namespace Mercent.SqlServer.Management
 				options.ToFileOnly = true;
 				options.Encoding = Encoding;
 				options.AllowSystemObjects = false;
+				options.TargetServerVersion = this.TargetServerVersion;
 				
 				Console.WriteLine(options.FileName);
 
@@ -1439,6 +1489,7 @@ namespace Mercent.SqlServer.Management
 				options.ToFileOnly = true;
 				options.Encoding = Encoding;
 				options.AllowSystemObjects = false;
+				options.TargetServerVersion = this.TargetServerVersion;
 
 				Console.WriteLine(options.FileName);
 
@@ -1472,6 +1523,7 @@ namespace Mercent.SqlServer.Management
 			options.Permissions = true;
 			options.AllowSystemObjects = false;
 			options.IncludeIfNotExists = true;
+			options.TargetServerVersion = this.TargetServerVersion;
 
 			Console.WriteLine(options.FileName);
 
@@ -1544,6 +1596,7 @@ namespace Mercent.SqlServer.Management
 			options.Permissions = true;
 			options.AllowSystemObjects = false;
 			options.IncludeIfNotExists = true;
+			options.TargetServerVersion = this.TargetServerVersion;
 
 			Console.WriteLine(options.FileName);
 
@@ -1567,6 +1620,7 @@ namespace Mercent.SqlServer.Management
 				options.Permissions = true;
 				options.AllowSystemObjects = false;
 				options.IncludeIfNotExists = true;
+				options.TargetServerVersion = this.TargetServerVersion;
 
 				Console.WriteLine(options.FileName);
 
@@ -1594,6 +1648,7 @@ namespace Mercent.SqlServer.Management
 				options.Permissions = true;
 				options.AllowSystemObjects = false;
 				options.IncludeIfNotExists = true;
+				options.TargetServerVersion = this.TargetServerVersion;
 
 				Console.WriteLine(options.FileName);
 
@@ -1631,6 +1686,7 @@ namespace Mercent.SqlServer.Management
 			ScriptingOptions options = new ScriptingOptions();
 			options.PrimaryObject = false;
 			options.Permissions = true;
+			options.TargetServerVersion = this.TargetServerVersion;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 
