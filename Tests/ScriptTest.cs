@@ -29,8 +29,8 @@ namespace Mercent.SqlServer.Management.Tests
 		public void SetUp()
 		{
 			SqlConnectionInfo connectionInfo = new SqlConnectionInfo();
-			connectionInfo.ServerName = "Tank";
-			connectionInfo.DatabaseName = "Product_DataWarehouse";
+			connectionInfo.ServerName = "mmarston";
+			connectionInfo.DatabaseName = "ref_merchant";
 			ServerConnection connection = new ServerConnection(connectionInfo);
 			server = new Server(connection);
 			server.SetDefaultInitFields

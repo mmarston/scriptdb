@@ -98,10 +98,22 @@ namespace Mercent.SqlServer.Management
 			connectionInfo.DatabaseName = DatabaseName;
 			ServerConnection connection = new ServerConnection(connectionInfo);
 			server = new Server(connection);
-			// Set the execution mode to capture SQL (this is like saving the script
-			// when editing sql objects in Management Studio).
 			
+			// We get the database object by name then create a new server object and
+			// get the database object by id. This is so that the database object can
+			// be initialized with the Name property having correct character case.
+			// Even when database names are not case sensitive, the Urn object is.
+			// In particular, when we compare Urns in the ScriptAssemblies method
+			// we need to database name to have the correct case.
 			database = server.Databases[databaseName];
+			// Get the database ID.
+			int databaseID = database.ID;
+			// Create a new server connection because the old server connection has
+			// cached the database object with the name we used to access it.
+			server = new Server(connection);
+			// Get the database object by ID.
+			database = server.Databases.ItemById(databaseID);
+			// Set the target server version based on the compatibility level.
 			targetServerVersion = GetSqlServerVersion(database.CompatibilityLevel);
 
 			PrefetchObjects();
@@ -459,6 +471,21 @@ namespace Mercent.SqlServer.Management
 
 		private void ScriptAssemblies()
 		{
+			// Check to make sure that the database contains at least one assembly 
+			// that is not a system object.
+			bool hasNonSystemAssembly = false;
+			foreach(SqlAssembly assembly in database.Assemblies)
+			{
+				if(!assembly.IsSystemObject)
+				{
+					hasNonSystemAssembly = true;
+					break;
+				}
+			}
+			
+			if(!hasNonSystemAssembly)
+				return;
+
 			ScriptingOptions options = new ScriptingOptions();
 			options.ToFileOnly = true;
 			options.AppendToFile = false;
@@ -470,100 +497,97 @@ namespace Mercent.SqlServer.Management
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
 
-			if(database.Assemblies.Count > 0)
+			SqlExecutionModes previousModes = server.ConnectionContext.SqlExecutionModes;
+			try
 			{
-				SqlExecutionModes previousModes = server.ConnectionContext.SqlExecutionModes;
-				try
+				server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
+
+				string relativeDir = "Assemblies";
+				string dir = Path.Combine(OutputDirectory, relativeDir);
+				if(!Directory.Exists(dir))
+					Directory.CreateDirectory(dir);
+
+				UrnCollection assemblies = new UrnCollection();
+
+				SqlSmoObject[] objects = new SqlSmoObject[1];
+				DependencyTree tree;
+				foreach(SqlAssembly assembly in database.Assemblies)
 				{
-					server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
+					if(assembly.IsSystemObject)
+						continue;
 
-					string relativeDir = "Assemblies";
-					string dir = Path.Combine(OutputDirectory, relativeDir);
-					if(!Directory.Exists(dir))
-						Directory.CreateDirectory(dir);
+					string filename = Path.Combine(relativeDir, assembly.Name + ".sql");
+					options.FileName = Path.Combine(OutputDirectory, filename);
+					scripter.Options.AppendToFile = false;
+					objects[0] = assembly;
 
-					UrnCollection assemblies = new UrnCollection();
-
-					SqlSmoObject[] objects = new SqlSmoObject[1];
-					DependencyTree tree;
-					foreach(SqlAssembly assembly in database.Assemblies)
+					Console.WriteLine(options.FileName);
+					scripter.ScriptWithList(objects);
+					// Check if the assembly is visible.
+					// If the assembly is visible then it can have CLR objects.
+					// If the assembly is not visible then it is intended to be called from
+					// other assemblies.
+					if(assembly.IsVisible)
 					{
-						if(assembly.IsSystemObject)
-							continue;
+						tree = scripter.DiscoverDependencies(objects, DependencyType.Children);
 
-						string filename = Path.Combine(relativeDir, assembly.Name + ".sql");
-						options.FileName = Path.Combine(OutputDirectory, filename);
-						scripter.Options.AppendToFile = false;
-						objects[0] = assembly;
-
-						Console.WriteLine(options.FileName);
-						scripter.ScriptWithList(objects);
-						// Check if the assembly is visible.
-						// If the assembly is visible then it can have CLR objects.
-						// If the assembly is not visible then it is intended to be called from
-						// other assemblies.
-						if(assembly.IsVisible)
+						// tree.FirstChild is the assembly and tree.FirstChild.FirstChild is the first dependent object
+						if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
 						{
-							tree = scripter.DiscoverDependencies(objects, DependencyType.Children);
-
-							// tree.FirstChild is the assembly and tree.FirstChild.FirstChild is the first dependent object
-							if(tree.HasChildNodes && tree.FirstChild.HasChildNodes)
+							IDictionary<string, Urn> sortedChildren = new SortedDictionary<string, Urn>(StringComparer.InvariantCultureIgnoreCase);
+							// loop through the children, which should be the SQL CLR objects such
+							// as user defined functions, user defined types, etc.
+							for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
 							{
-								IDictionary<string, Urn> sortedChildren = new SortedDictionary<string, Urn>(StringComparer.InvariantCultureIgnoreCase);
-								// loop through the children, which should be the SQL CLR objects such
-								// as user defined functions, user defined types, etc.
-								for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
+								// Make sure the object isn't another SqlAssembly that depends on this assembly
+								// because we don't want to include the script for the other assembly in the 
+								// script for this assembly
+								if(child.Urn.Type != "SqlAssembly")
 								{
-									// Make sure the object isn't another SqlAssembly that depends on this assembly
-									// because we don't want to include the script for the other assembly in the 
-									// script for this assembly
-									if(child.Urn.Type != "SqlAssembly")
-									{
-										sortedChildren.Add(child.Urn.Value, child.Urn);
-									}
+									sortedChildren.Add(child.Urn.Value, child.Urn);
 								}
-								// script out the dependent objects, appending to the file
-								scripter.Options.AppendToFile = true;
-								Urn[] children = new Urn[sortedChildren.Count];
-								sortedChildren.Values.CopyTo(children, 0);
-								scripter.ScriptWithList(children);
 							}
+							// script out the dependent objects, appending to the file
+							scripter.Options.AppendToFile = true;
+							Urn[] children = new Urn[sortedChildren.Count];
+							sortedChildren.Values.CopyTo(children, 0);
+							scripter.ScriptWithList(children);
 						}
-						else
-						{
-							// The create script doesn't include VISIBILITY (this appears
-							// to be a bug in SQL SMO) here we reset it and call Alter()
-							// to generate an alter statement.
-							assembly.IsVisible = true;
-							assembly.IsVisible = false;
-							server.ConnectionContext.CapturedSql.Clear();
-							assembly.Alter();
-							StringCollection batches = server.ConnectionContext.CapturedSql.Text;
-							// Remove the first string, which is a USE statement to set the database context
-							batches.RemoveAt(0);
-							WriteBatches(options.FileName, true, batches);
-						}
-						assemblies.Add(assembly.Urn);
 					}
-
-					// Determine proper order of assemblies based on dependencies
-					DependencyWalker walker = new DependencyWalker(server);
-					tree = walker.DiscoverDependencies(assemblies, DependencyType.Parents);
-					DependencyCollection dependencies = walker.WalkDependencies(tree);
-					foreach(DependencyCollectionNode node in dependencies)
+					else
 					{
-						// Check that the dependency is an assembly that we have scripted out
-						if(assemblies.Contains(node.Urn) && node.Urn.Type == "SqlAssembly")
-						{
-							string fileName = node.Urn.GetAttribute("Name") + ".sql";
-							this.fileNames.Add(Path.Combine(relativeDir, fileName));
-						}
+						// The create script doesn't include VISIBILITY (this appears
+						// to be a bug in SQL SMO) here we reset it and call Alter()
+						// to generate an alter statement.
+						assembly.IsVisible = true;
+						assembly.IsVisible = false;
+						server.ConnectionContext.CapturedSql.Clear();
+						assembly.Alter();
+						StringCollection batches = server.ConnectionContext.CapturedSql.Text;
+						// Remove the first string, which is a USE statement to set the database context
+						batches.RemoveAt(0);
+						WriteBatches(options.FileName, true, batches);
+					}
+					assemblies.Add(assembly.Urn);
+				}
+
+				// Determine proper order of assemblies based on dependencies
+				DependencyWalker walker = new DependencyWalker(server);
+				tree = walker.DiscoverDependencies(assemblies, DependencyType.Parents);
+				DependencyCollection dependencies = walker.WalkDependencies(tree);
+				foreach(DependencyCollectionNode node in dependencies)
+				{
+					// Check that the dependency is an assembly that we have scripted out
+					if(assemblies.Contains(node.Urn) && node.Urn.Type == "SqlAssembly")
+					{
+						string fileName = node.Urn.GetAttribute("Name") + ".sql";
+						this.fileNames.Add(Path.Combine(relativeDir, fileName));
 					}
 				}
-				finally
-				{
-					server.ConnectionContext.SqlExecutionModes = previousModes;
-				}
+			}
+			finally
+			{
+				server.ConnectionContext.SqlExecutionModes = previousModes;
 			}
 		}
 
