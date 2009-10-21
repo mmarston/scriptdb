@@ -623,6 +623,31 @@ namespace Mercent.SqlServer.Management
 			{
 				writer.WriteLine("USE [{0}]", FileScripter.DBName);
 				writer.WriteLine("GO");
+
+				// Add file groups that do not exist
+				MethodInfo scriptCreateMethod = typeof(FileGroup).GetMethod("ScriptCreate", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(StringCollection), typeof(ScriptingOptions) }, null);
+				StringCollection script = new StringCollection();
+				foreach(FileGroup fileGroup in database.FileGroups)
+				{
+					if(!String.Equals(fileGroup.Name, "PRIMARY"))
+					{
+						string stringLiteralName = fileGroup.Name.Replace("'", "''");
+						writer.WriteLine("IF NOT EXISTS(SELECT * FROM sys.filegroups WHERE name = N'{0}')", stringLiteralName);
+						writer.WriteLine("BEGIN");
+						fileGroup.Initialize(true);
+						script.Clear();
+						scriptCreateMethod.Invoke(fileGroup, new object[] { script, options });
+
+						foreach(string batch in script)
+						{
+							writer.WriteLine(batch);
+						}
+
+						writer.WriteLine("PRINT 'Warning: File group {0} was created without any data files. A file must be added to this file group before data can be inserted into it.'", MakeSqlBracket(stringLiteralName));
+						writer.WriteLine("END");
+						writer.WriteLine("GO");
+					}
+				}
 			}
 			this.fileNames.Add(fileName);
 		}

@@ -30,8 +30,9 @@ namespace Mercent.SqlServer.Management.Tests
 		{
 			SqlConnectionInfo connectionInfo = new SqlConnectionInfo();
 			connectionInfo.ServerName = "mmarston";
-			connectionInfo.DatabaseName = "ref_merchant";
+			connectionInfo.DatabaseName = "test_tracking3";
 			ServerConnection connection = new ServerConnection(connectionInfo);
+			Environment.CurrentDirectory = Path.GetTempPath();
 			server = new Server(connection);
 			server.SetDefaultInitFields
 			(
@@ -122,21 +123,77 @@ namespace Mercent.SqlServer.Management.Tests
 			//}
 			ScriptingOptions options = new ScriptingOptions();
 			options.ToFileOnly = true;
-			options.NoFileGroup = true;
+			options.NoFileGroup = false;
 			options.FileName = "database.sql";
 			options.IncludeIfNotExists = true;
 			options.FullTextCatalogs = true;
 			//options.Permissions = true;
 			//options.PrimaryObject = false;
-			DatabasePermissionInfo[] permissions = database.EnumDatabasePermissions("zirconium_service");
-
+			//DatabasePermissionInfo[] permissions = database.EnumDatabasePermissions("zirconium_service");
 
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			string newDbName = "$(DBNAME)";
 			typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, database, new string[] { newDbName }, null);
 
-			scripter.Script(new SqlSmoObject[] { database });
+
+			try
+			{
+				scripter.Script(new SqlSmoObject[] { database });
+			}
+			catch(Exception x)
+			{
+				throw;
+			}
+		}
+
+		[Test]
+		public void TestFileGroup()
+		{
+
+			try
+			{
+				ScriptingOptions options = new ScriptingOptions();
+				options.ToFileOnly = true;
+				options.NoFileGroup = true;
+				options.FileName = "database.sql";
+				options.IncludeIfNotExists = true;
+				options.FullTextCatalogs = true;
+
+				
+				Scripter scripter = new Scripter(server);
+				scripter.Options = options;
+					
+				string newDbName = "$(DBNAME)";
+				typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, database, new string[] { newDbName }, null);
+			
+				scripter.Script(new SqlSmoObject[] { database });
+
+				MethodInfo scriptCreateMethod = typeof(FileGroup).GetMethod("ScriptCreate", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(StringCollection), typeof(ScriptingOptions) }, null);
+				StringCollection script = new StringCollection();
+				foreach(FileGroup fileGroup in database.FileGroups)
+				{
+					if(!String.Equals(fileGroup.Name, "PRIMARY"))
+					{
+						fileGroup.Initialize(true);
+						scriptCreateMethod.Invoke(fileGroup, new object[] { script, options });
+					}
+				}
+
+				using(TextWriter writer = new StreamWriter("test.sql", false))
+				{
+					foreach(string batch in script)
+					{
+						writer.WriteLine(batch);
+						writer.WriteLine("GO");
+					}
+				}
+
+			}
+			catch(Exception x)
+			{
+				throw;
+			}
 		}
 
 		[Test]
