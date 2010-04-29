@@ -1597,7 +1597,7 @@ namespace Mercent.SqlServer.Management
 							// This change will work whether or not SMO has been updated to R2 on the user's machine.
 							if(!addToRoleScript.StartsWith("EXEC", StringComparison.InvariantCultureIgnoreCase))
 								writer.Write("EXEC ");
-							writer.WriteLine();
+							writer.WriteLine(addToRoleScript);
 							writer.WriteLine("GO");
 						}
 					}
