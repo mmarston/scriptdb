@@ -151,7 +151,7 @@ namespace Mercent.SqlServer.Management
 						string[] tableParts = Path.GetFileNameWithoutExtension(fileName).Split(new char[]{'.'});
 						string schemaName = tableParts[0];
 						string tableName = tableParts[1];
-						writer.WriteLine("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -n -k -E", FileScripter.DBName, schemaName, tableName, fileName);
+						writer.WriteLine("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -N -k -E", FileScripter.DBName, schemaName, tableName, fileName);
 					}
 					else
 					{
@@ -907,10 +907,10 @@ namespace Mercent.SqlServer.Management
 
 		private void BulkCopyTableData(Table table, string fileName)
 		{
-			// bcp [database].[schema].[table] out filename -S servername -T -n
+			// bcp [database].[schema].[table] out filename -S servername -T -N
 			string bcpArguments = String.Format
 			(
-				"\"{0}.{1}.{2}\" out \"{3}\" -S {4} -T -n",
+				"\"{0}.{1}.{2}\" out \"{3}\" -S {4} -T -N",
 				MakeSqlBracket(this.DatabaseName),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
@@ -1588,15 +1588,16 @@ namespace Mercent.SqlServer.Management
 				MethodInfo scriptAddToRoleMethod = databaseRoleType.GetMethod("ScriptAddToRole", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(string), typeof(ScriptingOptions) }, null);
 				foreach(DatabaseRole role in database.Roles)
 				{
-					// We only want to script out members that are roles.
-					// For some reason role.EnumRoles() throws an exception here.
-					// So use role.EnumMembers() and then check that the member is a role.
 					foreach(string member in role.EnumRoles())
 					{
 						if(database.Roles.Contains(member))
 						{
-							writer.Write("EXEC ");
-							writer.WriteLine(scriptAddToRoleMethod.Invoke(role, new object[]{member, options}));
+							string addToRoleScript = (string)scriptAddToRoleMethod.Invoke(role, new object[] { member, options });
+							// In SQL 2008 R2 SMO the ScriptAddToRole method includes EXEC. But SQL 2008 before R2 did not.
+							// This change will work whether or not SMO has been updated to R2 on the user's machine.
+							if(!addToRoleScript.StartsWith("EXEC", StringComparison.InvariantCultureIgnoreCase))
+								writer.Write("EXEC ");
+							writer.WriteLine();
 							writer.WriteLine("GO");
 						}
 					}

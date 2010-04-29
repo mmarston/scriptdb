@@ -1,6 +1,6 @@
 ﻿
-Microsoft Visual Studio Solution File, Format Version 10.00
-# Visual Studio 2008
+Microsoft Visual Studio Solution File, Format Version 11.00
+# Visual Studio 2010
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mercent.SqlServer.Management", "Mercent.SqlServer.Management.csproj", "{ED2A1340-22EE-4923-AD11-74A2819F6E53}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mercent.SqlServer.Management.Tests", "Mercent.SqlServer.Management.Tests.csproj", "{43408C98-6B7B-47C2-8323-B7935C41E9E8}"
