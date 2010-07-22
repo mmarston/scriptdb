@@ -339,6 +339,7 @@ namespace Mercent.SqlServer.Management.Tests
 			ScriptingOptions tableOptions = new ScriptingOptions();
 			tableOptions.ToFileOnly = true;
 			tableOptions.Encoding = System.Text.Encoding.UTF8;
+			tableOptions.Statistics = false;
 			
 			Scripter tableScripter = new Scripter(server);
 			tableScripter.Options = tableOptions;
@@ -373,6 +374,7 @@ namespace Mercent.SqlServer.Management.Tests
 			fkyOptions.Encoding = System.Text.Encoding.UTF8;
 			fkyOptions.DriForeignKeys = true;
 			fkyOptions.PrimaryObject = false;
+			fkyOptions.Statistics = false;
 
 			Scripter fkyScripter = new Scripter(server);
 			fkyScripter.Options = fkyOptions;

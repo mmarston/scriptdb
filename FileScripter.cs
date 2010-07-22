@@ -657,6 +657,7 @@ namespace Mercent.SqlServer.Management
 			ScriptingOptions tableOptions = new ScriptingOptions();
 			tableOptions.Encoding = this.Encoding;
 			tableOptions.TargetServerVersion = this.TargetServerVersion;
+			tableOptions.Statistics = false;
 
 			Scripter tableScripter = new Scripter(server);
 			tableScripter.Options = tableOptions;
@@ -696,6 +697,7 @@ namespace Mercent.SqlServer.Management
 			fkyOptions.PrimaryObject = false;
 			fkyOptions.SchemaQualifyForeignKeysReferences = true;
 			fkyOptions.TargetServerVersion = this.TargetServerVersion;
+			fkyOptions.Statistics = false;
 
 			Scripter fkyScripter = new Scripter(server);
 			fkyScripter.Options = fkyOptions;
