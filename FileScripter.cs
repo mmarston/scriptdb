@@ -7,6 +7,7 @@ using System.Data.SqlClient;
 using System.Data.SqlTypes;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Xml;
@@ -1590,11 +1591,14 @@ namespace Mercent.SqlServer.Management
 				MethodInfo scriptAddToRoleMethod = databaseRoleType.GetMethod("ScriptAddToRole", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(string), typeof(ScriptingOptions) }, null);
 				foreach(DatabaseRole role in database.Roles)
 				{
-					foreach(string member in role.EnumRoles())
+					// Get the list of roles that the current role is a member of.
+					// Sort them for consistency in source control.
+					var memberOfRoles = role.EnumRoles().OfType<string>().OrderBy(r => r);
+					foreach(string memberOfRole in memberOfRoles)
 					{
-						if(database.Roles.Contains(member))
+						if(database.Roles.Contains(memberOfRole))
 						{
-							string addToRoleScript = (string)scriptAddToRoleMethod.Invoke(role, new object[] { member, options });
+							string addToRoleScript = (string)scriptAddToRoleMethod.Invoke(role, new object[] { memberOfRole, options });
 							// In SQL 2008 R2 SMO the ScriptAddToRole method includes EXEC. But SQL 2008 before R2 did not.
 							// This change will work whether or not SMO has been updated to R2 on the user's machine.
 							if(!addToRoleScript.StartsWith("EXEC", StringComparison.InvariantCultureIgnoreCase))
