@@ -599,6 +599,7 @@ namespace Mercent.SqlServer.Management
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = outputFileName;
 			options.ToFileOnly = true;
+			options.AppendToFile = true;
 			options.Encoding = this.Encoding;
 			options.TargetServerVersion = this.TargetServerVersion;
 			
@@ -612,6 +613,23 @@ namespace Mercent.SqlServer.Management
 			scripter.Options = options;
 
 			Console.WriteLine(outputFileName);
+
+			// Add our own check to see if the database already exists so we can optionally drop it.
+			// The scripter will add its own check if the database does not exist so it will create it.
+			using(TextWriter writer = new StreamWriter(outputFileName,false, Encoding))
+			{
+				writer.WriteLine("IF EXISTS (SELECT name FROM sys.databases WHERE name = N'{0}')", FileScripter.DBName);
+				writer.WriteLine("BEGIN");
+				writer.WriteLine("\tPRINT 'Note: the database ''{0}'' already exits. All open transactions will be rolled back and existing connections closed.';", FileScripter.DBName);
+				writer.WriteLine("\tALTER DATABASE [{0}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;", FileScripter.DBName);
+				writer.WriteLine("\tIF '$(DROPDB)' IN ('true', '1')", FileScripter.DBName);
+				writer.WriteLine("\tBEGIN");
+				writer.WriteLine("\t\tPRINT 'Dropping database ''{0}''';", FileScripter.DBName);
+				writer.WriteLine("\t\tDROP DATABASE [{0}];", FileScripter.DBName);
+				writer.WriteLine("\tEND");
+				writer.WriteLine("END");
+				writer.WriteLine("GO");
+			}
 
 			// Set the value of the internal ScriptName property used when scripting the database.
 			// This the same property that the Transfer object sets to create the destination database.
