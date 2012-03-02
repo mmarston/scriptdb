@@ -2080,8 +2080,14 @@ namespace Mercent.SqlServer.Management
 				case SqlDataType.VarChar:
 				case SqlDataType.VarCharMax:
 					return "'" + EscapeChar(sqlValue.ToString(), '\'') + "'";
+				case SqlDataType.Date:
+					return "'" + ((DateTime)sqlValue).ToString("yyyy-MM-dd", DateTimeFormatInfo.InvariantInfo) + "'";
 				case SqlDataType.DateTime:
 					return "'" + ((SqlDateTime)sqlValue).Value.ToString("yyyy-MM-dd HH:mm:ss.fff", DateTimeFormatInfo.InvariantInfo) + "'";
+				case SqlDataType.DateTime2:
+					return "'" + ((DateTime)sqlValue).ToString("yyyy-MM-dd HH:mm:ss.FFFFFFF", DateTimeFormatInfo.InvariantInfo) + "'";
+				case SqlDataType.DateTimeOffset:
+					return "'" + ((SqlDateTime)sqlValue).Value.ToString("yyyy-MM-dd HH:mm:ss.FFFFFFF K", DateTimeFormatInfo.InvariantInfo) + "'";
 				case SqlDataType.NChar:
 				case SqlDataType.NText:
 				case SqlDataType.NVarChar:
@@ -2095,6 +2101,8 @@ namespace Mercent.SqlServer.Management
 					return ((SqlSingle)sqlValue).Value.ToString("r");
 				case SqlDataType.SmallDateTime:
 					return "'" + ((SqlDateTime)sqlValue).Value.ToString("yyyy-MM-dd HH:mm", DateTimeFormatInfo.InvariantInfo) + "'";
+				case SqlDataType.Time:
+					return "'" + ((DateTime)sqlValue).ToString("HH:mm:ss.FFFFFFF", DateTimeFormatInfo.InvariantInfo) + "'";
 				case SqlDataType.Xml:
 					XmlWriterSettings settings = new XmlWriterSettings();
 					settings.OmitXmlDeclaration = true;
@@ -2115,7 +2123,9 @@ namespace Mercent.SqlServer.Management
 							return "N'" + EscapeChar(stringWriter.ToString(), '\'') + "'";
 						}
 					}
-					
+				//case SqlDataType.Geography:
+				//case SqlDataType.Geometry:
+				//case SqlDataType.HierarchyId:	
 				default:
 					throw new ApplicationException("Unsupported type :" + sqlDataType.ToString());
 			}

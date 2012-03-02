@@ -2,15 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
-using NUnit.Framework;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Mercent.SqlServer.Management;
 
 namespace Mercent.SqlServer.Management.Tests
 {
-	[TestFixture]
+	[TestClass]
 	public class FileScripterFixture
 	{
-		[Test]
+		[TestMethod]
 		public void ScriptTest()
 		{
 			FileScripter scripter = new FileScripter();
