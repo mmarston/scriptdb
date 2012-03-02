@@ -2102,7 +2102,7 @@ namespace Mercent.SqlServer.Management
 				case SqlDataType.SmallDateTime:
 					return "'" + ((SqlDateTime)sqlValue).Value.ToString("yyyy-MM-dd HH:mm", DateTimeFormatInfo.InvariantInfo) + "'";
 				case SqlDataType.Time:
-					return "'" + ((DateTime)sqlValue).ToString("HH:mm:ss.FFFFFFF", DateTimeFormatInfo.InvariantInfo) + "'";
+					return "'" + ((TimeSpan)sqlValue).ToString("g", DateTimeFormatInfo.InvariantInfo) + "'";
 				case SqlDataType.Xml:
 					XmlWriterSettings settings = new XmlWriterSettings();
 					settings.OmitXmlDeclaration = true;
