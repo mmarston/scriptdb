@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Diagnostics;
@@ -21,10 +22,14 @@ namespace Mercent.SqlServer.Management
 {
 	public class FileScripter
 	{
-		private List<string> fileNames = new List<string>();
-		private Dictionary<string, string> fileDictionary;
+		private List<ScriptFile> scriptFiles = new List<ScriptFile>();
+		private HashSet<string> fileSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		private bool ignoreFileSetModified = false;
+		private SortedSet<string> ignoreFileSet = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
 		private Server server;
 		private Database database;
+		private Char allExtraFilesResponseChar = '\0';
+		private Char allEmptyDirectoriesResponseChar = '\0';
 
 		private static readonly string DBName = "$(DBNAME)";
 		
@@ -56,13 +61,112 @@ namespace Mercent.SqlServer.Management
 			set { encoding = value; }
 		}
 
-		private SqlServerVersion targetServerVersion = SqlServerVersion.Version100;
+		private SqlServerVersion targetServerVersion = SqlServerVersion.Version110;
 		public SqlServerVersion TargetServerVersion
 		{
 			get { return targetServerVersion; }
 			set { targetServerVersion = value; }
 		}
 
+		private void AddIgnoreFiles()
+		{
+			string ignoreFileName = Path.Combine(OutputDirectory, "IgnoreFiles.txt");
+			AddScriptFile("IgnoreFiles.txt", null);
+			if(File.Exists(ignoreFileName))
+			{
+				foreach(string line in File.ReadAllLines(ignoreFileName))
+				{
+					string ignoreLine = line.Trim();
+					ignoreFileSet.Add(ignoreLine);
+					if(ignoreLine.Contains("*"))
+					{
+						string directory = OutputDirectory;
+						string filePattern = ignoreLine;
+						string[] parts = ignoreLine.Split('\\', '/');
+						if(parts.Length > 0)
+						{
+							string[] dirs = parts.Take(parts.Length - 1).ToArray();
+							directory = Path.Combine(OutputDirectory, Path.Combine(dirs));
+							filePattern = parts.Last();
+						}
+						if(Directory.Exists(directory))
+						{
+							foreach(string fileName in Directory.EnumerateFiles(directory, filePattern))
+							{
+								AddScriptFile(fileName, null);
+							}
+						}
+					}
+					else
+						AddScriptFile(ignoreLine, null);
+				}
+			}
+		}
+
+		
+		private void SaveIgnoreFiles()
+		{
+			if(ignoreFileSetModified)
+			{
+				string ignoreFileName = Path.Combine(OutputDirectory, "IgnoreFiles.txt");
+				File.WriteAllLines(ignoreFileName, this.ignoreFileSet);
+			}
+		}
+		
+		private void AddScriptFile(ScriptFile scriptFile)
+		{
+			if(scriptFile == null)
+				throw new ArgumentNullException("scriptFile");
+			this.scriptFiles.Add(scriptFile);
+			if(scriptFile.FileName != null)
+				this.fileSet.Add(scriptFile.FileName);
+		}
+
+		private void AddScriptFile(string fileName)
+		{
+			AddScriptFile(new ScriptFile(fileName));
+		}
+
+		private void AddScriptFile(string fileName, string command)
+		{
+			AddScriptFile(new ScriptFile(fileName, command));
+		}
+
+		private void AddDataFile(string fileName, string schema, string table)
+		{
+			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -N -k -E", FileScripter.DBName, schema, table, fileName);
+			AddScriptFile(fileName, command);
+		}
+
+		private void AddScriptFileRange(IEnumerable<string> fileNames)
+		{
+			foreach(string fileName in fileNames)
+				AddScriptFile(fileName);
+		}
+
+		private void AddScriptPermission(Database db, StringCollection script, ScriptingOptions options)
+		{
+			object preferences = GetScriptingPreferences(options);
+			typeof(Database).InvokeMember("AddScriptPermission", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.InvokeMethod, null, db, new object[] { script, preferences });
+		}
+
+		private string ScriptAddToRole(DatabaseRole role, string memberOfRole, ScriptingOptions options)
+		{
+			object preferences = GetScriptingPreferences(options);
+			return (string)typeof(DatabaseRole).InvokeMember("ScriptAddToRole", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.InvokeMethod, null, role, new object[] { memberOfRole, preferences });
+		}
+
+		private void ScriptCreate(FileGroup fileGroup, StringCollection script, ScriptingOptions options)
+		{
+			object preferences = GetScriptingPreferences(options);
+			typeof(FileGroup).InvokeMember("ScriptCreate", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.InvokeMethod, null, fileGroup, new object[] { script, preferences });
+		}
+
+		private object GetScriptingPreferences(ScriptingOptions options)
+		{
+			return typeof(ScriptingOptions).InvokeMember("GetScriptingPreferences", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.InvokeMethod, null, options, null);			
+		}
+		
 		/// <summary>
 		/// Gets the SqlServerVersion for the specified CompatibilityLevel.
 		/// </summary>
@@ -75,10 +179,16 @@ namespace Mercent.SqlServer.Management
 				// If the compatibility level is 90 (2005) then we target version 90
 				case CompatibilityLevel.Version90:
 					return SqlServerVersion.Version90;
+				// If the compatibility level is 80 (2000) then we target version 80
 				// If the compatibility level is 80 (2000) or less then we target version 80.
-				// The SMO 2008 doesn't support targeting versions earlier than 80.
-				default:
+				case CompatibilityLevel.Version80:
+				case CompatibilityLevel.Version70:
+				case CompatibilityLevel.Version65:
+				case CompatibilityLevel.Version60:
 					return SqlServerVersion.Version80;
+				// Default target version 110 (2012)
+				default:
+					return SqlServerVersion.Version110;
 			}
 		}
 
@@ -87,7 +197,11 @@ namespace Mercent.SqlServer.Management
 			if(this.OutputDirectory.Length > 0 && !Directory.Exists(this.OutputDirectory))
 				Directory.CreateDirectory(this.OutputDirectory);
 
-			fileNames.Clear();
+			scriptFiles.Clear();
+			ignoreFileSet.Clear();
+			ignoreFileSetModified = false;
+			allEmptyDirectoriesResponseChar = '\0';
+			allExtraFilesResponseChar = '\0';
 			
 			// When using the Server(string serverName) constructor some things
 			// don't work correct. In particular, some things (such as DatabaseRole.EnumRoles())
@@ -120,6 +234,8 @@ namespace Mercent.SqlServer.Management
 			PrefetchObjects();
 
 			ScriptDatabase();
+			ScriptFileGroups();
+			ScriptFullTextCatalogs();
 			ScriptRoles();
 			ScriptSchemas();
 			ScriptXmlSchemaCollections();
@@ -130,6 +246,8 @@ namespace Mercent.SqlServer.Management
 			ScriptPartitionSchemes();
 			ScriptAssemblies();
 			ScriptUserDefinedDataTypes();
+			ScriptUserDefinedTableTypes();
+			ScriptSequences();
 			ScriptUserDefinedFunctionHeaders();
 			ScriptViewHeaders();
 			ScriptStoredProcedureHeaders();
@@ -142,22 +260,11 @@ namespace Mercent.SqlServer.Management
 			using(StreamWriter writer = new StreamWriter(Path.Combine(OutputDirectory, "CreateDatabaseObjects.sql"), false, Encoding))
 			{
 				writer.WriteLine(":on error exit");
-				foreach(string fileName in this.fileNames)
+				foreach(ScriptFile file in this.scriptFiles.Where(f => f.Command != null))
 				{
-					writer.WriteLine("PRINT '{0}'", fileName);
-					writer.WriteLine("GO", fileName);
-					if(Path.GetExtension(fileName) == ".dat")
-					{
-						// Note: this won't work if the schema or table name contain a dot ('.').
-						string[] tableParts = Path.GetFileNameWithoutExtension(fileName).Split(new char[]{'.'});
-						string schemaName = tableParts[0];
-						string tableName = tableParts[1];
-						writer.WriteLine("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -N -k -E", FileScripter.DBName, schemaName, tableName, fileName);
-					}
-					else
-					{
-						writer.WriteLine(":r \"{0}\"", fileName);
-					}
+					writer.WriteLine("PRINT '{0}'", file.FileName);
+					writer.WriteLine("GO");
+					writer.WriteLine(file.Command);
 				}
 			}
 
@@ -170,22 +277,22 @@ namespace Mercent.SqlServer.Management
 			//database.Triggers;
 			//database.Users;
 
-			fileNames.Add("CreateDatabaseObjects.sql");
+			AddScriptFile("CreateDatabaseObjects.sql", null);
 
-			// put the filenames in a case-insensitive string dictionary
-			// so that we can look them up in the PromptDeleteFiles method
-			fileDictionary = new Dictionary<string, string>(fileNames.Count, StringComparer.InvariantCultureIgnoreCase);
-			foreach(string fileName in fileNames)
-			{
-				fileDictionary.Add(fileName, fileName);
-			}
 			DirectoryInfo outputDirectoryInfo;
 			if(OutputDirectory != "")
 				outputDirectoryInfo = new DirectoryInfo(OutputDirectory);
 			else
 				outputDirectoryInfo = new DirectoryInfo(".");
 
-			PromptDeleteFiles(outputDirectoryInfo, "");
+			// Prompt the user for what to do with extra files.
+			// When objects are deleted from the database ensure that the user
+			// wants to delete the corresponding files. There may also be other
+			// files in the directory that are not scripted files.
+
+			AddIgnoreFiles();
+			PromptExtraFiles(outputDirectoryInfo, "");
+			SaveIgnoreFiles();
 		}
 
 		private void PrefetchObjects()
@@ -454,19 +561,100 @@ namespace Mercent.SqlServer.Management
 			database.PrefetchObjects(typeof(View), prefetchOptions);
 		}
 
-		private void PromptDeleteFiles(DirectoryInfo dirInfo, string relativeDir)
+		private void PromptExtraFiles(DirectoryInfo dirInfo, string relativeDir)
 		{
 			string relativeName;
 			foreach(FileInfo fileInfo in dirInfo.GetFiles())
 			{
+				// Skip over the file if it isn't a .sql or .dat file.
+				if(!String.Equals(fileInfo.Extension, ".sql", StringComparison.OrdinalIgnoreCase) && !String.Equals(fileInfo.Extension, ".dat", StringComparison.OrdinalIgnoreCase))
+					continue;
 				relativeName = Path.Combine(relativeDir, fileInfo.Name);
-				if(!fileDictionary.ContainsKey(relativeName))
+				if(!fileSet.Contains(relativeName))
+				{
 					Console.WriteLine("Extra file: {0}", relativeName);
+					char responseChar = this.allExtraFilesResponseChar;
+					if(allExtraFilesResponseChar == '\0')
+					{
+						Console.WriteLine("Keep, delete, or ignore this file? For all extra files? (press k, d, i, or a)");
+						ConsoleKeyInfo key = Console.ReadKey(true);
+						responseChar = key.KeyChar;
+						if(responseChar == 'a')
+						{
+							Console.WriteLine("Keep, delete, or ignore all remaining extra files? (press k, d, i)");
+							key = Console.ReadKey(true);
+							responseChar = key.KeyChar;
+							// Only accept the response char if it is k, d, or i.
+							// Other characters are ignored, which is the same as keeping this file.
+							if(responseChar == 'k' || responseChar == 'd' || responseChar == 'i')
+								allExtraFilesResponseChar = responseChar;
+						}
+					}
+					if(responseChar == 'd')
+					{
+						try
+						{
+							fileInfo.Delete();
+							Console.WriteLine("Deleted file.");
+						}
+						catch(Exception ex)
+						{
+							Console.WriteLine("Delete failed. {0}: {1}", ex.GetType().Name, ex.Message);
+						}
+					}
+					else if(responseChar == 'i')
+					{
+						ignoreFileSetModified = true;
+						ignoreFileSet.Add(relativeName);
+					}
+				}
 			}
 			foreach(DirectoryInfo subDirInfo in dirInfo.GetDirectories())
 			{
-				if((subDirInfo.Attributes & FileAttributes.Hidden) != FileAttributes.Hidden)
-					PromptDeleteFiles(subDirInfo, subDirInfo.Name);
+				if(subDirInfo.Attributes.HasFlag(FileAttributes.Hidden))
+					continue;
+				string relativeSubDir = Path.Combine(relativeDir, subDirInfo.Name);
+				PromptExtraFiles(subDirInfo, relativeSubDir);
+				// If the directory is empty and is not ignored, prompt about deleting it.
+				if(!subDirInfo.EnumerateFileSystemInfos().Any() && !ignoreFileSet.Contains(relativeSubDir))
+				{
+					Console.WriteLine("Empty directory: {0}", relativeSubDir);
+					char responseChar = this.allEmptyDirectoriesResponseChar;
+					if(allEmptyDirectoriesResponseChar == '\0')
+					{
+						Console.WriteLine("Keep, delete, or ignore this directory? For all empty directories? (press k, d, i, or a)");
+						ConsoleKeyInfo key = Console.ReadKey(true);
+						responseChar = key.KeyChar;
+						if(responseChar == 'a')
+						{
+							Console.WriteLine("Keep, delete, or ignore all remaining empty directories? (press k, d, i)");
+							key = Console.ReadKey(true);
+							responseChar = key.KeyChar;
+							// Only accept the response char if it is k, d, or i.
+							// Other characters are ignored, which is the same as keeping this directory.
+							if(responseChar == 'k' || responseChar == 'd' || responseChar == 'i')
+								allEmptyDirectoriesResponseChar = responseChar;
+						}
+					}
+					if(responseChar == 'd')
+					{
+						try
+						{
+							subDirInfo.Delete();
+							Console.WriteLine("Deleted directory.");
+						}
+						catch(Exception ex)
+						{
+							Console.WriteLine("Delete failed. {0}: {1}", ex.GetType().Name, ex.Message);
+						}
+					}
+					else if(responseChar == 'i')
+					{
+						ignoreFileSetModified = true;
+						ignoreFileSet.Add(relativeSubDir);
+					}
+				}
+
 			}
 		}
 
@@ -582,7 +770,7 @@ namespace Mercent.SqlServer.Management
 					if(assemblies.Contains(node.Urn) && node.Urn.Type == "SqlAssembly")
 					{
 						string fileName = node.Urn.GetAttribute("Name") + ".sql";
-						this.fileNames.Add(Path.Combine(relativeDir, fileName));
+						AddScriptFile(Path.Combine(relativeDir, fileName));
 					}
 				}
 			}
@@ -604,10 +792,8 @@ namespace Mercent.SqlServer.Management
 			options.TargetServerVersion = this.TargetServerVersion;
 			
 			options.AllowSystemObjects = false;
-			options.FullTextCatalogs = true;
 			options.IncludeIfNotExists = true;
 			options.NoFileGroup = true;
-
 
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -637,44 +823,104 @@ namespace Mercent.SqlServer.Management
 			// the old database name with the new database name.
 			typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, database, new string[] { FileScripter.DBName }, null);
 
+			// Script out the database options.
 			scripter.ScriptWithList(new SqlSmoObject[] { database });
+
+			// Now that the datase exists, add USE statement so that all the following scripts use the database.
 			using(TextWriter writer = new StreamWriter(outputFileName, true, Encoding))
 			{
 				writer.WriteLine("USE [{0}]", FileScripter.DBName);
 				writer.WriteLine("GO");
+			}
 
-				// Add file groups that do not exist
-				MethodInfo scriptCreateMethod = typeof(FileGroup).GetMethod("ScriptCreate", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(StringCollection), typeof(ScriptingOptions) }, null);
-				StringCollection script = new StringCollection();
-				foreach(FileGroup fileGroup in database.FileGroups)
+			AddScriptFile(fileName);
+		}
+
+		private void ScriptFileGroups()
+		{
+			List<FileGroup> fileGroups = new List<FileGroup>();
+			foreach(FileGroup fileGroup in database.FileGroups)
+			{
+				if(!String.Equals(fileGroup.Name, "PRIMARY"))
+					fileGroups.Add(fileGroup);
+			}
+			if(fileGroups.Count > 0)
+			{
+				string relativeDir = "Storage";
+				string dir = Path.Combine(OutputDirectory, relativeDir);
+				if(!Directory.Exists(dir))
+					Directory.CreateDirectory(dir);
+
+				string fileName = Path.Combine(relativeDir, "FileGroups.sql");
+				string outputFileName = Path.Combine(OutputDirectory, fileName);
+				
+				ScriptingOptions options = new ScriptingOptions();
+				options.Encoding = Encoding;
+				options.AllowSystemObjects = false;
+				options.TargetServerVersion = this.TargetServerVersion;
+
+				Console.WriteLine(outputFileName);
+
+				// Script out the file groups (but not the files because we don't want the file paths in source control).
+				using(TextWriter writer = new StreamWriter(outputFileName, false, Encoding))
 				{
-					if(!String.Equals(fileGroup.Name, "PRIMARY"))
+					StringCollection script = new StringCollection();
+					foreach(FileGroup fileGroup in fileGroups)
 					{
 						string stringLiteralName = fileGroup.Name.Replace("'", "''");
 						writer.WriteLine("IF NOT EXISTS(SELECT * FROM sys.filegroups WHERE name = N'{0}')", stringLiteralName);
 						writer.WriteLine("BEGIN");
+
 						fileGroup.Initialize(true);
 						script.Clear();
-						scriptCreateMethod.Invoke(fileGroup, new object[] { script, options });
-
-						foreach(string batch in script)
-						{
-							writer.WriteLine(batch);
-						}
+						ScriptCreate(fileGroup, script, options);
+						// There should only be one batch in the script collection
+						// and we don't want a GO statement afterwards (so don't use WriteBatches method).
+						writer.WriteLine(script[0]);
 
 						writer.WriteLine("PRINT 'Warning: File group {0} was created without any data files. A file must be added to this file group before data can be inserted into it.'", MakeSqlBracket(stringLiteralName));
 						writer.WriteLine("END");
 						writer.WriteLine("GO");
 					}
 				}
+
+				AddScriptFile(fileName);
 			}
-			this.fileNames.Add(fileName);
+		}
+
+		private void ScriptFullTextCatalogs()
+		{
+			if(database.FullTextCatalogs.Count > 0)
+			{
+				string relativeDir = "Storage";
+				string dir = Path.Combine(OutputDirectory, relativeDir);
+				if(!Directory.Exists(dir))
+					Directory.CreateDirectory(dir);
+
+				string fileName = Path.Combine(relativeDir, "FullTextCatalogs.sql");
+				string outputFileName = Path.Combine(OutputDirectory, fileName);
+				ScriptingOptions options = new ScriptingOptions();
+				options.Encoding = Encoding;
+				options.AllowSystemObjects = false;
+				options.TargetServerVersion = this.TargetServerVersion;
+
+				Console.WriteLine(outputFileName);
+
+				Scripter scripter = new Scripter(server);
+				scripter.Options = options;
+				FullTextCatalog[] fullTextCatalogs = new FullTextCatalog[database.FullTextCatalogs.Count];
+				database.FullTextCatalogs.CopyTo(fullTextCatalogs, 0);
+				scripter.Script(fullTextCatalogs);
+
+				AddScriptFile(fileName);
+			}
 		}
 
 		private void ScriptTables()
 		{
 			ScriptingOptions tableOptions = new ScriptingOptions();
 			tableOptions.Encoding = this.Encoding;
+			tableOptions.Permissions = true;
 			tableOptions.TargetServerVersion = this.TargetServerVersion;
 			tableOptions.Statistics = false;
 
@@ -699,7 +945,6 @@ namespace Mercent.SqlServer.Management
 			kciOptions.FullTextIndexes = true;
 			kciOptions.Indexes = true;
 			kciOptions.NonClusteredIndexes = true;
-			kciOptions.Permissions = true;
 			kciOptions.Statistics = true;
 			kciOptions.Triggers = true;
 			kciOptions.XmlIndexes = true;
@@ -722,17 +967,6 @@ namespace Mercent.SqlServer.Management
 			fkyScripter.Options = fkyOptions;
 			fkyScripter.PrefetchObjects = false;
 
-			string relativeDir = "Tables";
-			string dir = Path.Combine(OutputDirectory, relativeDir);
-			if(!Directory.Exists(dir))
-				Directory.CreateDirectory(dir);
-			
-			string relativeDataDir = "Data";
-			string dataDir = Path.Combine(OutputDirectory, relativeDataDir);
-			if(!Directory.Exists(dataDir))
-				Directory.CreateDirectory(dataDir);
-
-			List<string> tabFileNames = new List<string>();
 			List<string> kciFileNames = new List<string>();
 			List<string> fkyFileNames = new List<string>();
 
@@ -743,47 +977,59 @@ namespace Mercent.SqlServer.Management
 				if (!table.IsSystemObject)
 				{
 					objects[0] = table;
-					string fileName = Path.Combine(relativeDir, table.Schema + "." + table.Name + ".tab");
-					tabFileNames.Add(fileName);
+
+					string relativeDir = Path.Combine("Schemas", table.Schema, "Tables");
+					string dir = Path.Combine(OutputDirectory, relativeDir);
+					if(!Directory.Exists(dir))
+						Directory.CreateDirectory(dir);
+
+					string fileName = Path.Combine(relativeDir, table.Name + ".sql");
+					AddScriptFile(fileName);
 					string outputFileName = Path.Combine(OutputDirectory, fileName);
 					Console.WriteLine(outputFileName);
 					WriteBatches(outputFileName, tableScripter.ScriptWithList(objects));
 
-					fileName = Path.ChangeExtension(fileName, ".kci");
-					kciFileNames.Add(fileName);
-					outputFileName = Path.Combine(OutputDirectory, fileName);
+					string kciFileName = Path.ChangeExtension(fileName, ".kci.sql");
+					kciFileNames.Add(kciFileName);
+					outputFileName = Path.Combine(OutputDirectory, kciFileName);
 					Console.WriteLine(outputFileName);
 					WriteBatches(outputFileName, kciScripter.ScriptWithList(objects));
 
-					fileName = Path.ChangeExtension(fileName, ".fky");
-					fkyFileNames.Add(fileName);
-					outputFileName = Path.Combine(OutputDirectory, fileName);
+					string fkyFileName = Path.ChangeExtension(fileName, ".fky.sql");
+					fkyFileNames.Add(fkyFileName);
+					outputFileName = Path.Combine(OutputDirectory, fkyFileName);
 					Console.WriteLine(outputFileName);
 					WriteBatches(outputFileName, fkyScripter.ScriptWithList(objects));
 
-					// If the table has more than 50,000 rows then we will use BCP.
-					if(table.RowCount > 50000)
+					if(table.RowCount > 0)
 					{
-						fileName = Path.Combine(relativeDataDir, table.Schema + "." + table.Name + ".dat");
-						tabFileNames.Add(fileName);
-						outputFileName = Path.Combine(OutputDirectory, fileName);
-						Console.WriteLine(outputFileName);
-						BulkCopyTableData(table, outputFileName);
-					}
-					else if(table.RowCount > 0)
-					{
-						fileName = Path.Combine(relativeDataDir, table.Schema + "." + table.Name + ".sql");
-						tabFileNames.Add(fileName);
-						outputFileName = Path.Combine(OutputDirectory, fileName);
-						Console.WriteLine(outputFileName);
-						ScriptTableData(table, outputFileName);
+						string relativeDataDir = Path.Combine("Schemas", table.Schema, "Data");
+						string dataDir = Path.Combine(OutputDirectory, relativeDataDir);
+						if(!Directory.Exists(dataDir))
+							Directory.CreateDirectory(dataDir);
+					
+						// If the table has more than 50,000 rows then we will use BCP.
+						if(table.RowCount > 50000)
+						{
+							fileName = Path.Combine(relativeDataDir, table.Name + ".dat");
+							AddDataFile(fileName, table.Schema, table.Name);
+							outputFileName = Path.Combine(OutputDirectory, fileName);
+							Console.WriteLine(outputFileName);
+							BulkCopyTableData(table, outputFileName);
+						}
+						else
+						{
+							fileName = Path.Combine(relativeDataDir, table.Name + ".sql");
+							AddScriptFile(fileName);
+							outputFileName = Path.Combine(OutputDirectory, fileName);
+							Console.WriteLine(outputFileName);
+							ScriptTableData(table, outputFileName);
+						}
 					}
 				}
 			}
-
-			fileNames.AddRange(tabFileNames);
-			fileNames.AddRange(kciFileNames);
-			fileNames.AddRange(fkyFileNames);
+			AddScriptFileRange(kciFileNames);
+			AddScriptFileRange(fkyFileNames);
 		}
 
 		private void ScriptTableData(Table table, string fileName)
@@ -1008,11 +1254,11 @@ namespace Mercent.SqlServer.Management
 			UrnCollection schemaBoundUrns = new UrnCollection();
 			List<string> nonSchemaBoundFileNames = new List<string>();
 
-			string functionRelativeDir = "Functions";
-			string viewRelativeDir = "Views";
-			
-			ScriptUserDefinedFunctions(functionRelativeDir, schemaBoundUrns, nonSchemaBoundFileNames);
-			ScriptViews(viewRelativeDir, schemaBoundUrns, nonSchemaBoundFileNames);
+			foreach(Schema schema in GetSchemas())
+			{
+				ScriptUserDefinedFunctions(schema.Name, schemaBoundUrns, nonSchemaBoundFileNames);
+				ScriptViews(schema.Name, schemaBoundUrns, nonSchemaBoundFileNames);
+			}
 
 			// If there are any schema bound functions or views then
 			// we need to create them in dependency order.
@@ -1030,12 +1276,12 @@ namespace Mercent.SqlServer.Management
 						switch(node.Urn.Type)
 						{
 							case "View":
-								filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".viw";
-								this.fileNames.Add(Path.Combine(viewRelativeDir, filename));
+								filename = String.Format(@"Schemas\{0}\Views\{1}.sql", node.Urn.GetAttribute("Schema"), node.Urn.GetAttribute("Name"));
+								AddScriptFile(filename);
 								break;
 							case "UserDefinedFunction":
-								filename = node.Urn.GetAttribute("Schema") + "." + node.Urn.GetAttribute("Name") + ".udf";
-								this.fileNames.Add(Path.Combine(functionRelativeDir, filename));
+								filename = String.Format(@"Schemas\{0}\Functions\{1}.sql", node.Urn.GetAttribute("Schema"), node.Urn.GetAttribute("Name"));
+								AddScriptFile(filename);
 								break;
 						}
 					}
@@ -1043,22 +1289,33 @@ namespace Mercent.SqlServer.Management
 			}
 
 			// Add all non-schema bound functions and view file names after the schema bound ones
-			this.fileNames.AddRange(nonSchemaBoundFileNames);
+			AddScriptFileRange(nonSchemaBoundFileNames);
 		}
 
 		private void ScriptViewHeaders()
 		{
+			foreach(Schema schema in GetSchemas())
+			{
+				ScriptViewHeaders(schema.Name);
+			}
+		}
+
+		private void ScriptViewHeaders(string schema)
+		{
+			if(schema == null)
+				throw new ArgumentNullException("schema");
+
 			IList<View> views = new List<View>();
 			foreach(View view in database.Views)
 			{
-				if(!view.IsSystemObject)
+				if(view.Schema == schema && !view.IsSystemObject)
 					views.Add(view);
 			}
 
 			if(views.Count == 0)
 				return;
 
-			string relativeDir = "Views";
+			string relativeDir = Path.Combine("Schemas", schema, "Views");
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
@@ -1089,21 +1346,25 @@ namespace Mercent.SqlServer.Management
 					writer.WriteLine("GO");
 				}
 			}
-			this.fileNames.Add(fileName);
+			AddScriptFile(fileName);
 		}
 
-		private void ScriptViews(string relativeDir, UrnCollection schemaBoundUrns, ICollection<string> nonSchemaBoundFileNames)
+		private void ScriptViews(string schema, UrnCollection schemaBoundUrns, ICollection<string> nonSchemaBoundFileNames)
 		{
+			if(schema == null)
+				throw new ArgumentNullException("schema");
+
 			IList<View> views = new List<View>();
 			foreach(View view in database.Views)
 			{
-				if(!view.IsSystemObject)
+				if(view.Schema == schema && !view.IsSystemObject)
 					views.Add(view);
 			}
 
 			if(views.Count == 0)
 				return;
 
+			string relativeDir = Path.Combine("Schemas", schema, "Views");
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
@@ -1120,7 +1381,6 @@ namespace Mercent.SqlServer.Management
 			viewOptions.Indexes = true;
 			viewOptions.Permissions = true;
 			viewOptions.Statistics = true;
-			viewOptions.PrimaryObject = false;
 			viewOptions.TargetServerVersion = targetServerVersion;
 
 			Scripter viewScripter = new Scripter(server);
@@ -1140,30 +1400,21 @@ namespace Mercent.SqlServer.Management
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 			foreach(View view in views)
 			{
-				string fileName = Path.Combine(relativeDir, view.Schema + "." + view.Name + ".viw");
+				string fileName = Path.Combine(relativeDir, view.Name + ".sql");
 				string outputFileName = Path.Combine(OutputDirectory, fileName);
 				Console.WriteLine(outputFileName);
-				StringCollection script = new StringCollection();
-				script.Add("SET ANSI_NULLS " + (view.AnsiNullsStatus ? "ON" : "OFF"));
-				script.Add("SET QUOTED_IDENTIFIER " + (view.QuotedIdentifierStatus ? "ON" : "OFF"));
-				script.Add(view.ScriptHeader(true) + view.TextBody);
+				
+				objects[0] = view;
+				StringCollection script = viewScripter.ScriptWithList(objects);
+				// The 3rd bath in the script is the CREATE VIEW statement.
+				// Replace it with an ALTER VIEW statement.
+				script[2] = view.ScriptHeader(true) + view.TextBody;
+
 				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 				{
 					WriteBatches(writer, script);
-					objects[0] = view;
-					WriteBatches(writer, viewScripter.ScriptWithList(objects));
-				}
-				if(view.IsSchemaBound)
-					schemaBoundUrns.Add(view.Urn);
-				else
-					nonSchemaBoundFileNames.Add(fileName);
 
-				foreach(Trigger trigger in view.Triggers)
-				{
-					fileName = Path.Combine(relativeDir, view.Schema + "." + trigger.Name + ".trg"); // is the trigger schema the same as the view?
-					outputFileName = Path.Combine(OutputDirectory, fileName);
-					Console.WriteLine(outputFileName);
-					using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
+					foreach(Trigger trigger in view.Triggers)
 					{
 						objects[0] = trigger;
 						triggerScripter.Options = dropOptions;
@@ -1171,8 +1422,13 @@ namespace Mercent.SqlServer.Management
 						triggerScripter.Options = triggerOptions;
 						WriteBatches(writer, triggerScripter.ScriptWithList(objects));
 					}
-					nonSchemaBoundFileNames.Add(fileName);
 				}
+				if(view.IsSchemaBound)
+					schemaBoundUrns.Add(view.Urn);
+				else
+					nonSchemaBoundFileNames.Add(fileName);
+
+				
 			}
 		}
 
@@ -1207,7 +1463,7 @@ namespace Mercent.SqlServer.Management
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
 			scripter.ScriptWithList(urns);
-			this.fileNames.Add(fileName);
+			AddScriptFile(fileName);
 		}
 
 		private void ScriptServiceBrokerContracts()
@@ -1241,7 +1497,7 @@ namespace Mercent.SqlServer.Management
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
 			scripter.ScriptWithList(urns);
-			this.fileNames.Add(fileName);
+			AddScriptFile(fileName);
 		}
 
 		private void ScriptServiceBrokerQueues()
@@ -1286,7 +1542,7 @@ namespace Mercent.SqlServer.Management
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
 			scripter.ScriptWithList(urns);
-			this.fileNames.Add(fileName);
+			AddScriptFile(fileName);
 		}
 
 		private void ScriptServiceBrokerServices()
@@ -1320,22 +1576,33 @@ namespace Mercent.SqlServer.Management
 			scripter.Options = options;
 			scripter.ScriptWithList(urns);
 			scripter.PrefetchObjects = false;
-			this.fileNames.Add(fileName);
+			AddScriptFile(fileName);
 		}
 
 		private void ScriptStoredProcedureHeaders()
 		{
+			foreach(Schema schema in GetSchemas())
+			{
+				ScriptStoredProcedureHeaders(schema.Name);
+			}
+		}
+
+		private void ScriptStoredProcedureHeaders(string schema)
+		{
+			if(schema == null)
+				throw new ArgumentNullException("schema");
+
 			IList<StoredProcedure> sprocs = new List<StoredProcedure>();
 			foreach(StoredProcedure sproc in database.StoredProcedures)
 			{
-				if(!sproc.IsSystemObject && sproc.ImplementationType == ImplementationType.TransactSql)
+				if(sproc.Schema == schema && !sproc.IsSystemObject && sproc.ImplementationType == ImplementationType.TransactSql)
 					sprocs.Add(sproc);
 			}
 
 			if(sprocs.Count == 0)
 				return;
 
-			string relativeDir = "Stored Procedures";
+			string relativeDir = Path.Combine("Schemas", schema, "Stored Procedures");
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
@@ -1351,11 +1618,22 @@ namespace Mercent.SqlServer.Management
 					writer.WriteLine("GO");
 				}
 			}
-			this.fileNames.Add(fileName);
+			AddScriptFile(fileName);
 		}
 
 		private void ScriptStoredProcedures()
 		{
+			foreach(Schema schema in GetSchemas())
+			{
+				ScriptStoredProcedures(schema.Name);
+			}
+		}
+
+		private void ScriptStoredProcedures(string schema)
+		{
+			if(schema == null)
+				throw new ArgumentNullException("schema");
+
 			ScriptingOptions dropOptions = new ScriptingOptions();
 			dropOptions.IncludeIfNotExists = true;
 			dropOptions.ScriptDrops = true;
@@ -1368,14 +1646,14 @@ namespace Mercent.SqlServer.Management
 			IList<StoredProcedure> sprocs = new List<StoredProcedure>();
 			foreach(StoredProcedure sproc in database.StoredProcedures)
 			{
-				if(!sproc.IsSystemObject && sproc.ImplementationType == ImplementationType.TransactSql)
+				if(sproc.Schema == schema && !sproc.IsSystemObject && sproc.ImplementationType == ImplementationType.TransactSql)
 					sprocs.Add(sproc);
 			}
 
 			if(sprocs.Count == 0)
 				return;
 
-			string relativeDir = "Stored Procedures";
+			string relativeDir = Path.Combine("Schemas", schema, "Stored Procedures");
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
@@ -1389,7 +1667,7 @@ namespace Mercent.SqlServer.Management
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 			foreach (StoredProcedure sproc in sprocs)
 			{
-				string fileName = Path.Combine(relativeDir, sproc.Schema + "." + sproc.Name + ".prc");
+				string fileName = Path.Combine(relativeDir, sproc.Name + ".sql");
 				string outputFileName = Path.Combine(OutputDirectory, fileName);
 				Console.WriteLine(outputFileName);
 				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
@@ -1400,16 +1678,27 @@ namespace Mercent.SqlServer.Management
 					scripter.Options = options;
 					WriteBatches(writer, scripter.ScriptWithList(objects));
 				}
-				this.fileNames.Add(fileName);
+				AddScriptFile(fileName);
 			}
 		}
 
 		private void ScriptUserDefinedFunctionHeaders()
 		{
+			foreach(Schema schema in GetSchemas())
+			{
+				ScriptUserDefinedFunctionHeaders(schema.Name);
+			}
+		}
+
+		private void ScriptUserDefinedFunctionHeaders(string schema)
+		{
+			if(schema == null)
+				throw new ArgumentNullException("schema");
+
 			IList<UserDefinedFunction> udfs = new List<UserDefinedFunction>();
 			foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
 			{
-				if(!udf.IsSystemObject && udf.ImplementationType == ImplementationType.TransactSql)
+				if(udf.Schema == schema && !udf.IsSystemObject && udf.ImplementationType == ImplementationType.TransactSql)
 				{
 					udfs.Add(udf);
 				}
@@ -1418,7 +1707,7 @@ namespace Mercent.SqlServer.Management
 			if(udfs.Count == 0)
 				return;
 
-			string relativeDir = "Functions";
+			string relativeDir = Path.Combine("Schemas", schema, "Functions");
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
@@ -1460,15 +1749,18 @@ namespace Mercent.SqlServer.Management
 					writer.WriteLine("GO");
 				}
 			}
-			this.fileNames.Add(fileName);
+			AddScriptFile(fileName);
 		}
 
-		private void ScriptUserDefinedFunctions(string relativeDir, UrnCollection schemaBoundUrns, ICollection<string> nonSchemaBoundFileNames)
+		private void ScriptUserDefinedFunctions(string schema, UrnCollection schemaBoundUrns, ICollection<string> nonSchemaBoundFileNames)
 		{
+			if(schema == null)
+				throw new ArgumentNullException("schema");
+
 			IList<UserDefinedFunction> udfs = new List<UserDefinedFunction>();
 			foreach(UserDefinedFunction udf in database.UserDefinedFunctions)
 			{
-				if(!udf.IsSystemObject && udf.ImplementationType == ImplementationType.TransactSql)
+				if(udf.Schema == schema && !udf.IsSystemObject && udf.ImplementationType == ImplementationType.TransactSql)
 				{
 					udfs.Add(udf);
 				}
@@ -1477,6 +1769,7 @@ namespace Mercent.SqlServer.Management
 			if(udfs.Count == 0)
 				return;
 
+			string relativeDir = Path.Combine("Schemas", schema, "Functions");
 			string dir = Path.Combine(OutputDirectory, relativeDir);
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
@@ -1490,23 +1783,20 @@ namespace Mercent.SqlServer.Management
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
 
-			options.PrimaryObject = false;
-
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 			foreach(UserDefinedFunction udf in udfs)
 			{
-				string fileName = Path.Combine(relativeDir, udf.Schema + "." + udf.Name + ".udf");
+				string fileName = Path.Combine(relativeDir, udf.Name + ".sql");
 				string outputFileName = Path.Combine(OutputDirectory, fileName);
 				Console.WriteLine(outputFileName);
-				StringCollection script = new StringCollection();
-				script.Add("SET ANSI_NULLS " + (udf.AnsiNullsStatus ? "ON" : "OFF"));
-				script.Add("SET QUOTED_IDENTIFIER " + (udf.QuotedIdentifierStatus ? "ON" : "OFF"));
-				script.Add(udf.ScriptHeader(true) + udf.TextBody);
+				objects[0] = udf;
+				StringCollection script = scripter.ScriptWithList(objects);
+				// The 3rd bath in the script is the CREATE FUNCTION statement.
+				// Replace it with an ALTER FUNCTION statement.
+				script[2] = udf.ScriptHeader(true) + udf.TextBody;
 				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 				{
 					WriteBatches(writer, script);
-					objects[0] = udf;
-					WriteBatches(writer, scripter.ScriptWithList(objects));
 				}
 				if(udf.IsSchemaBound)
 					schemaBoundUrns.Add(udf.Urn);
@@ -1540,7 +1830,7 @@ namespace Mercent.SqlServer.Management
 				database.PartitionFunctions.CopyTo(partitionFunctions, 0);
 				scripter.Script(partitionFunctions);
 
-				this.fileNames.Add(fileName);
+				AddScriptFile(fileName);
 			}
 		}
 
@@ -1568,7 +1858,7 @@ namespace Mercent.SqlServer.Management
 				transfer.CopyAllObjects = false;
 				transfer.CopyAllPartitionSchemes = true;
 				transfer.ScriptTransfer();
-				this.fileNames.Add(fileName);
+				AddScriptFile(fileName);
 			}
 		}
 		
@@ -1605,8 +1895,6 @@ namespace Mercent.SqlServer.Management
 			// script out role membership (only members that are roles)
 			using(TextWriter writer = new StreamWriter(Path.Combine(this.OutputDirectory, fileName), true, Encoding))
 			{
-				Type databaseRoleType = typeof(DatabaseRole);
-				MethodInfo scriptAddToRoleMethod = databaseRoleType.GetMethod("ScriptAddToRole", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(string), typeof(ScriptingOptions) }, null);
 				foreach(DatabaseRole role in database.Roles)
 				{
 					// Get the list of roles that the current role is a member of.
@@ -1616,7 +1904,7 @@ namespace Mercent.SqlServer.Management
 					{
 						if(database.Roles.Contains(memberOfRole))
 						{
-							string addToRoleScript = (string)scriptAddToRoleMethod.Invoke(role, new object[] { memberOfRole, options });
+							string addToRoleScript = ScriptAddToRole(role, memberOfRole, options);
 							// In SQL 2008 R2 SMO the ScriptAddToRole method includes EXEC. But SQL 2008 before R2 did not.
 							// This change will work whether or not SMO has been updated to R2 on the user's machine.
 							if(!addToRoleScript.StartsWith("EXEC", StringComparison.InvariantCultureIgnoreCase))
@@ -1630,9 +1918,7 @@ namespace Mercent.SqlServer.Management
 				// I haven't found a way to script out just the permissions using public
 				// methods so here I use reflection to call the method that scripts permissions.
 				StringCollection permissionScript = new StringCollection();
-				Type databaseType = typeof(Database);
-				
-				databaseType.InvokeMember("AddScriptPermission", BindingFlags.Instance | BindingFlags.InvokeMethod | BindingFlags.NonPublic, null, database, new object[] { permissionScript, options });
+				AddScriptPermission(database, permissionScript, options);
 				foreach(string permission in permissionScript)
 				{
 					// Write out the permission as long as it isn't a grant/deny connect permission.
@@ -1644,25 +1930,20 @@ namespace Mercent.SqlServer.Management
 					}
 				}
 			}
-			this.fileNames.Add(fileName);
+			AddScriptFile(fileName);
 		}
 
 
 		private void ScriptSchemas()
 		{
 			UrnCollection urns = new UrnCollection();
-			foreach(Schema schema in database.Schemas)
-			{
-				// Get user schemas - note the check on ID was taken from the
-				// Transfer.GetObjectList() method using reflection.
-				if(schema.ID > 4 && (schema.ID < 0x4000 || schema.ID >= 0x4010))
-					urns.Add(schema.Urn);
-			}
+			urns.AddRange(GetSchemas(false).Select(s => s.Urn));
 
 			if(urns.Count == 0)
 				return;
 
-			string fileName = "Schemas.sql";
+			Directory.CreateDirectory(Path.Combine(OutputDirectory, "Schemas"));
+			string fileName = @"Schemas\Schemas.sql";
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = Path.Combine(OutputDirectory, fileName);
 			options.ToFileOnly = true;
@@ -1670,6 +1951,7 @@ namespace Mercent.SqlServer.Management
 			options.Permissions = true;
 			options.AllowSystemObjects = false;
 			options.IncludeIfNotExists = true;
+			options.ScriptOwner = true;
 			options.TargetServerVersion = this.TargetServerVersion;
 
 			Console.WriteLine(options.FileName);
@@ -1679,83 +1961,68 @@ namespace Mercent.SqlServer.Management
 			scripter.PrefetchObjects = false;
 			scripter.ScriptWithList(urns);
 			
-			this.fileNames.Add(fileName);
+			AddScriptFile(fileName);
 		}
 
-		private void ScriptSynonyms()
+		private void ScriptSchemaObjects(ICollection collection, string fileName)
 		{
-			if(database.Synonyms.Count > 0)
+			foreach(var group in collection.Cast<ScriptSchemaObjectBase>().GroupBy(s => s.Schema))
 			{
-				string fileName = "Synonyms.sql";
+				string schema = group.Key;
+				string relativeDir = Path.Combine("Schemas", schema);
+				string dir = Path.Combine(OutputDirectory, relativeDir);
+				if(!Directory.Exists(dir))
+					Directory.CreateDirectory(dir);
+
+				string relativeFilePath = Path.Combine(relativeDir, fileName);
+				Console.WriteLine(relativeFilePath);
+
 				ScriptingOptions options = new ScriptingOptions();
-				options.FileName = Path.Combine(OutputDirectory, fileName);
+				options.FileName = Path.Combine(OutputDirectory, relativeFilePath);
 				options.ToFileOnly = true;
 				options.Encoding = Encoding;
-				options.Permissions = true;
 				options.AllowSystemObjects = false;
 				options.IncludeIfNotExists = true;
+				options.Permissions = true;
 				options.TargetServerVersion = this.TargetServerVersion;
-
-				Console.WriteLine(options.FileName);
-
-				Synonym[] synonyms = new Synonym[database.Synonyms.Count];
-				database.Synonyms.CopyTo(synonyms, 0);
 
 				Scripter scripter = new Scripter(server);
 				scripter.Options = options;
 				scripter.PrefetchObjects = false;
-				scripter.ScriptWithList(synonyms);
-				
-				this.fileNames.Add(fileName);
+				ScriptSchemaObjectBase[] objects = group.ToArray();
+				scripter.ScriptWithList(objects);
+
+				AddScriptFile(relativeFilePath);
 			}
+		}
+		
+		private void ScriptSequences()
+		{
+			ScriptSchemaObjects(database.Sequences, "Sequences.sql");
+		}
+
+		private void ScriptSynonyms()
+		{
+			ScriptSchemaObjects(database.Synonyms, "Synonyms.sql");
 		}
 
 		private void ScriptUserDefinedDataTypes()
 		{
-			if(database.UserDefinedDataTypes.Count > 0)
-			{
-				string fileName = "Types.sql";
-				ScriptingOptions options = new ScriptingOptions();
-				options.FileName = Path.Combine(this.OutputDirectory, fileName);
-				options.ToFileOnly = true;
-				options.Encoding = Encoding;
-				options.Permissions = true;
-				options.AllowSystemObjects = false;
-				options.IncludeIfNotExists = true;
-				options.TargetServerVersion = this.TargetServerVersion;
+			ScriptSchemaObjects(database.UserDefinedDataTypes, "Types.sql");
+		}
 
-				Console.WriteLine(options.FileName);
-
-				Transfer transfer = new Transfer(database);
-				transfer.Options = options;
-				transfer.CopyAllObjects = false;
-				transfer.CopyAllUserDefinedDataTypes = true;
-				transfer.ScriptTransfer();
-				this.fileNames.Add(fileName);
-			}
+		private void ScriptUserDefinedTableTypes()
+		{
+			// We may want to consider scripting each table type as a separate file,
+			// but for now that are all scripted into one file (all the types within the same schema).
+			ScriptSchemaObjects(database.UserDefinedTableTypes, "TableTypes.sql");
 		}
 
 		private void ScriptXmlSchemaCollections()
 		{
-			List<XmlSchemaCollection> xmlSchemaCollections = new List<XmlSchemaCollection>();
-			foreach(XmlSchemaCollection xmlSchemaCollection in database.XmlSchemaCollections)
-			{
-				// this is a hack to only get user defined xml schema collections, not built in ones
-				if(xmlSchemaCollection.ID >= 65536)
-				{
-					xmlSchemaCollections.Add(xmlSchemaCollection);
-				}
-			}
-
-			if(xmlSchemaCollections.Count == 0)
-				return;
-
-			string relativeDir = "Xml Schema Collections";
-			string dir = Path.Combine(OutputDirectory, relativeDir);
-			if(!Directory.Exists(dir))
-				Directory.CreateDirectory(dir);
-
-			StringBuilder sb = new StringBuilder();
+			var groups = database.XmlSchemaCollections.Cast<XmlSchemaCollection>()
+				.Where(x => x.ID >= 65536) // Only get user defined xml schema collections, not built in ones.
+				.GroupBy(x => x.Schema);
 
 			ScriptingOptions options = new ScriptingOptions();
 			options.PrimaryObject = false;
@@ -1764,7 +2031,7 @@ namespace Mercent.SqlServer.Management
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 
-			
+
 			XmlWriterSettings writerSettings = new XmlWriterSettings();
 			writerSettings.ConformanceLevel = ConformanceLevel.Fragment;
 			writerSettings.NewLineOnAttributes = true;
@@ -1776,14 +2043,21 @@ namespace Mercent.SqlServer.Management
 			readerSettings.ConformanceLevel = ConformanceLevel.Fragment;
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 			
-			foreach(XmlSchemaCollection xmlSchemaCollection in xmlSchemaCollections)
+			foreach(var group in groups)
 			{
-				// this is a hack to only get user defined xml schema collections, not built in ones
-				if(xmlSchemaCollection.ID >= 65536)
+				string schema = group.Key;
+				string relativeDir = Path.Combine("Schemas", schema, "Xml Schema Collections");
+				string dir = Path.Combine(OutputDirectory, relativeDir);
+				if(!Directory.Exists(dir))
+					Directory.CreateDirectory(dir);
+
+				StringBuilder sb = new StringBuilder();
+				foreach(XmlSchemaCollection xmlSchemaCollection in group)
 				{
-					string fileName = Path.Combine(relativeDir, xmlSchemaCollection.Schema + "." + xmlSchemaCollection.Name + ".sql");
+					string fileName = Path.Combine(relativeDir, xmlSchemaCollection.Name + ".sql");
 					string outputFileName = Path.Combine(OutputDirectory, fileName);
-					Console.WriteLine(outputFileName);
+					Console.WriteLine(fileName);
+
 					using(TextReader textReader = new StringReader(xmlSchemaCollection.Text))
 					{
 						using(XmlReader xmlReader = XmlReader.Create(textReader, readerSettings))
@@ -1813,10 +2087,10 @@ namespace Mercent.SqlServer.Management
 						StringCollection script = scripter.ScriptWithList(objects);
 						// Remove the CREATE XML SCHEMA statement as we've already written it above (with formatted XML).
 						// This appears to be a bug with SQL SMO that ignores the PrimaryObject scripting option.
-						script.RemoveAt(0); 
+						script.RemoveAt(0);
 						WriteBatches(writer, script);
 					}
-					this.fileNames.Add(fileName);
+					AddScriptFile(fileName);
 				}
 			}
 		}
@@ -2049,6 +2323,13 @@ namespace Mercent.SqlServer.Management
 				}
 			}
 			return orderBy.ToString();
+		}
+
+		private IEnumerable<Schema> GetSchemas(bool includeDbo = true)
+		{
+			return database.Schemas
+				.Cast<Schema>()
+				.Where(s => !s.IsSystemObject || (includeDbo && s.Name == "dbo"));
 		}
 
 		private string GetSqlLiteral(object sqlValue, SqlDataType sqlDataType)

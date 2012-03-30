@@ -16,21 +16,28 @@ using Microsoft.SqlServer.Management.Smo.Broker;
 using Microsoft.SqlServer.Management.Common;
 using Microsoft.SqlServer.Management.Sdk.Sfc;
 using NUnit.Framework;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Assert = Microsoft.VisualStudio.TestTools.UnitTesting.Assert;
 
 namespace Mercent.SqlServer.Management.Tests
 {
-	[TestFixture]
+	[TestClass]
 	public class ScriptTest
 	{
-		private Server server;
-		private Database database;
+		private static Server server;
+		private static Database database;
+		private static string OutputDirectory = Environment.CurrentDirectory;
+		private static SqlServerVersion targetServerVersion = SqlServerVersion.Version110;
+		private Encoding Encoding = Encoding.UTF8;
 
-		[SetUp]
-		public void SetUp()
+
+
+		[ClassInitialize]
+		public static void SetUp(TestContext context)
 		{
 			SqlConnectionInfo connectionInfo = new SqlConnectionInfo();
-			connectionInfo.ServerName = "mmarston";
-			connectionInfo.DatabaseName = "test_tracking3";
+			connectionInfo.ServerName = "tank";
+			connectionInfo.DatabaseName = "Product_Merchant";
 			ServerConnection connection = new ServerConnection(connectionInfo);
 			Environment.CurrentDirectory = Path.GetTempPath();
 			server = new Server(connection);
@@ -72,6 +79,37 @@ namespace Mercent.SqlServer.Management.Tests
 			//database.PrefetchObjects(typeof(PartitionFunction), options);
 		}
 
+		/// <summary>
+		/// Writes out batches of SQL statements.
+		/// </summary>
+		/// <param name="writer">TextWriter to write to.</param>
+		/// <param name="batches">Collection of SQL statements.</param>
+		/// <remarks>
+		/// Each string in the collection of SQL statements is trimmed before being written.
+		/// A 'GO' statement is added after each one.
+		/// </remarks>
+		private void WriteBatches(TextWriter writer, StringCollection script)
+		{
+			foreach(string batch in script)
+			{
+				writer.WriteLine(batch.Trim());
+				writer.WriteLine("GO");
+			}
+		}
+
+		private void WriteBatches(string fileName, StringCollection script)
+		{
+			WriteBatches(fileName, false, script);
+		}
+
+		private void WriteBatches(string fileName, bool append, StringCollection script)
+		{
+			using(TextWriter writer = new StreamWriter(fileName, append, this.Encoding))
+			{
+				WriteBatches(writer, script);
+			}
+		}
+
 		[Test]
 		public void Test1()
 		{
@@ -107,44 +145,85 @@ namespace Mercent.SqlServer.Management.Tests
 			scripter.Script(new SqlSmoObject[] { database.Views["vwTable1"], database.UserDefinedFunctions["Udf1"] });
 		}
 
-		[Test]
+		[TestMethod]
 		public void TestDatabase()
 		{
-			
-			//server.ConnectionContext.SqlExecutionModes = SqlExecutionModes.CaptureSql;
-			//database.Rename("$(NEW_DB_NAME)");
-			////server.ConnectionContext.CapturedSql.Clear();
-			//database.Create();
-			//database.Alter();
-			////database.DatabaseOptions.
-			//foreach(string line in server.ConnectionContext.CapturedSql.Text)
-			//{
-			//    Console.WriteLine(line);
-			//}
+			string newDbName = "$(DBNAME)";
+			string fileName = "Database.sql";
+			string outputFileName = fileName;
 			ScriptingOptions options = new ScriptingOptions();
+			options.FileName = outputFileName;
 			options.ToFileOnly = true;
-			options.NoFileGroup = false;
-			options.FileName = "database.sql";
-			options.IncludeIfNotExists = true;
+			options.AppendToFile = true;
+			options.Encoding = Encoding.Default;
+
+			options.AllowSystemObjects = false;
 			options.FullTextCatalogs = true;
-			//options.Permissions = true;
-			//options.PrimaryObject = false;
-			//DatabasePermissionInfo[] permissions = database.EnumDatabasePermissions("zirconium_service");
+			options.IncludeIfNotExists = true;
+			options.NoFileGroup = true;
+
 
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
-			string newDbName = "$(DBNAME)";
+
+			Console.WriteLine(outputFileName);
+
+			// Add our own check to see if the database already exists so we can optionally drop it.
+			// The scripter will add its own check if the database does not exist so it will create it.
+			using(TextWriter writer = new StreamWriter(outputFileName, false, Encoding.Default))
+			{
+				writer.WriteLine("IF EXISTS (SELECT name FROM sys.databases WHERE name = N'{0}')", newDbName);
+				writer.WriteLine("BEGIN");
+				writer.WriteLine("\tPRINT 'Note: the database ''{0}'' already exits. All open transactions will be rolled back and existing connections closed.';", newDbName);
+				writer.WriteLine("\tALTER DATABASE [{0}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;", newDbName);
+				writer.WriteLine("\tIF '$(DROPDB)' IN ('true', '1')", newDbName);
+				writer.WriteLine("\tBEGIN");
+				writer.WriteLine("\t\tPRINT 'Dropping database ''{0}''';", newDbName);
+				writer.WriteLine("\t\tDROP DATABASE [{0}];", newDbName);
+				writer.WriteLine("\tEND");
+				writer.WriteLine("END");
+				writer.WriteLine("GO");
+			}
+
+			// Set the value of the internal ScriptName property used when scripting the database.
+			// This the same property that the Transfer object sets to create the destination database.
+			// The alternative (which I had previously used) was to go through the script and replace
+			// the old database name with the new database name.
 			typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, database, new string[] { newDbName }, null);
 
+			scripter.ScriptWithList(new SqlSmoObject[] { database, database.FullTextCatalogs[0] });
+			using(TextWriter writer = new StreamWriter(outputFileName, true, Encoding.Default))
+			{
+				writer.WriteLine("USE [{0}]", newDbName);
+				writer.WriteLine("GO");
 
-			try
-			{
-				scripter.Script(new SqlSmoObject[] { database });
+				// Add file groups that do not exist
+				MethodInfo scriptCreateMethod = typeof(FileGroup).GetMethod("ScriptCreate", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(StringCollection), typeof(ScriptingOptions) }, null);
+				StringCollection script = new StringCollection();
+				foreach(FileGroup fileGroup in database.FileGroups)
+				{
+					if(!String.Equals(fileGroup.Name, "PRIMARY"))
+					{
+						string stringLiteralName = fileGroup.Name.Replace("'", "''");
+						writer.WriteLine("IF NOT EXISTS(SELECT * FROM sys.filegroups WHERE name = N'{0}')", stringLiteralName);
+						writer.WriteLine("BEGIN");
+						fileGroup.Initialize(true);
+						script.Clear();
+						scriptCreateMethod.Invoke(fileGroup, new object[] { script, options });
+
+						foreach(string batch in script)
+						{
+							writer.WriteLine(batch);
+						}
+
+						writer.WriteLine("PRINT 'Warning: File group {0} was created without any data files. A file must be added to this file group before data can be inserted into it.'", MakeSqlBracket(stringLiteralName));
+						writer.WriteLine("END");
+						writer.WriteLine("GO");
+					}
+				}
 			}
-			catch(Exception x)
-			{
-				throw;
-			}
+
+			Console.WriteLine(File.ReadAllText(outputFileName));
 		}
 
 		[Test]
@@ -431,71 +510,83 @@ namespace Mercent.SqlServer.Management.Tests
 			}
 		}
 
-		[Test]
+		[TestMethod]
 		public void TestViews()
 		{
+			string schema = "dbo";
+
+			IList<View> views = new List<View>();
+			foreach(View view in database.Views)
+			{
+				if(view.Schema == schema && !view.IsSystemObject)
+					views.Add(view);
+			}
+
+			if(views.Count == 0)
+				return;
+
+			string relativeDir = Path.Combine("Schemas", schema, "Views");
+			string dir = Path.Combine(OutputDirectory, relativeDir);
+			if(!Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			ScriptingOptions dropOptions = new ScriptingOptions();
+			dropOptions.Encoding = Encoding;
+			dropOptions.IncludeIfNotExists = true;
+			dropOptions.ScriptDrops = true;
+			dropOptions.TargetServerVersion = targetServerVersion;
 
 			ScriptingOptions viewOptions = new ScriptingOptions();
-			viewOptions.ToFileOnly = true;
-			viewOptions.Encoding = System.Text.Encoding.UTF8;
+			viewOptions.Encoding = Encoding;
+			viewOptions.FullTextIndexes = true;
 			viewOptions.Indexes = true;
 			viewOptions.Permissions = true;
 			viewOptions.Statistics = true;
-
+			viewOptions.TargetServerVersion = targetServerVersion;
+			
 			Scripter viewScripter = new Scripter(server);
 			viewScripter.Options = viewOptions;
 			viewScripter.PrefetchObjects = false;
 
+
 			ScriptingOptions triggerOptions = new ScriptingOptions();
-			triggerOptions.ToFileOnly = true;
-			triggerOptions.Encoding = System.Text.Encoding.UTF8;
+			triggerOptions.Encoding = Encoding;
 			triggerOptions.PrimaryObject = false;
 			triggerOptions.Triggers = true;
+			triggerOptions.TargetServerVersion = targetServerVersion;
 
 			Scripter triggerScripter = new Scripter(server);
 			triggerScripter.Options = triggerOptions;
 			triggerScripter.PrefetchObjects = false;
 
-			if (!Directory.Exists("Views"))
-				Directory.CreateDirectory("Views");
-
-			ScriptingOptions prefetchOptions = new ScriptingOptions();
-			prefetchOptions.Indexes = true;
-			prefetchOptions.Permissions = true;
-			prefetchOptions.Statistics = true;
-			prefetchOptions.Triggers = true;
-
-			database.PrefetchObjects(typeof(View), prefetchOptions);
-
-			UrnCollection urns = new UrnCollection();
-
-			foreach (View view in database.Views)
+			SqlSmoObject[] objects = new SqlSmoObject[1];
+			foreach(View view in views)
 			{
-				if (!view.IsSystemObject)
+				string fileName = Path.Combine(relativeDir, view.Name + ".sql");
+				string outputFileName = Path.Combine(OutputDirectory, fileName);
+				Console.WriteLine(outputFileName);
+				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 				{
-					string filename = Path.Combine("Views", view.Schema + "." + view.Name + ".viw");
-					viewScripter.Options.FileName = filename;
-					viewScripter.ScriptWithList(new SqlSmoObject[] { view });
-					//urns.Add(view.Urn);
-					foreach (Trigger trigger in view.Triggers)
+					objects[0] = view;
+					StringCollection script = viewScripter.ScriptWithList(objects);
+					// The 3rd bath in the script is the CREATE VIEW statement.
+					// Replace it with an ALTER VIEW statement.
+					script[2] = view.ScriptHeader(true) + view.TextBody;
+					WriteBatches(writer, script);
+
+					foreach(Trigger trigger in view.Triggers)
 					{
-						triggerScripter.Options.FileName = Path.Combine("Views", view.Schema + "." + trigger.Name + ".trg");
-						triggerScripter.ScriptWithList(new SqlSmoObject[] { trigger });
-						urns.Add(trigger.Urn);
+						objects[0] = trigger;
+						triggerScripter.Options = dropOptions;
+						WriteBatches(writer, triggerScripter.ScriptWithList(objects));
+						triggerScripter.Options = triggerOptions;
+						WriteBatches(writer, triggerScripter.ScriptWithList(objects));
 					}
 				}
-			}
-
-			DependencyWalker walker = new DependencyWalker(server);
-			DependencyTree tree = walker.DiscoverDependencies(urns, DependencyType.Parents);
-			DependencyCollection dependencies = walker.WalkDependencies(tree);
-			using(TextWriter writer = new StreamWriter(@"Views\Dependencies.txt"))
-			{
-				foreach(DependencyCollectionNode node in dependencies)
-				{
-					writer.WriteLine(node.Urn);
-					//writer.WriteLine("r: {0}.{1}.tab", node.Urn.GetAttribute("Schema"), node.Urn.GetAttribute("Name"));
-				}
+				//if(view.IsSchemaBound)
+				//    schemaBoundUrns.Add(view.Urn);
+				//else
+				//    nonSchemaBoundFileNames.Add(fileName);
 			}
 		}
 
@@ -1625,18 +1716,19 @@ namespace Mercent.SqlServer.Management.Tests
 			transfer.ScriptTransfer();
 		}
 
-		[Test]
+		[TestMethod]
 		public void TestSchemas()
 		{
 
 			string fileName = "Schemas.sql";
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = fileName;
-			options.ToFileOnly = true;
+			//options.ToFileOnly = true;
 			options.Encoding = System.Text.Encoding.UTF8;
 			options.Permissions = true;
 			options.AllowSystemObjects = false;
 			options.IncludeIfNotExists = true;
+			options.ScriptOwner = true;
 
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -1644,7 +1736,7 @@ namespace Mercent.SqlServer.Management.Tests
 			Schema[] schemas = new Schema[database.Schemas.Count];
 			database.Schemas.CopyTo(schemas, 0);
 
-			scripter.Script(schemas);
+			StringCollection script = scripter.Script(schemas);
 		}
 
 		[Test]
