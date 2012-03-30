@@ -1998,7 +1998,8 @@ namespace Mercent.SqlServer.Management
 		
 		private void ScriptSequences()
 		{
-			ScriptSchemaObjects(database.Sequences, "Sequences.sql");
+			if(TargetServerVersion >= SqlServerVersion.Version110)
+				ScriptSchemaObjects(database.Sequences, "Sequences.sql");
 		}
 
 		private void ScriptSynonyms()
@@ -2015,7 +2016,8 @@ namespace Mercent.SqlServer.Management
 		{
 			// We may want to consider scripting each table type as a separate file,
 			// but for now that are all scripted into one file (all the types within the same schema).
-			ScriptSchemaObjects(database.UserDefinedTableTypes, "TableTypes.sql");
+			if(TargetServerVersion >= SqlServerVersion.Version100)
+				ScriptSchemaObjects(database.UserDefinedTableTypes, "TableTypes.sql");
 		}
 
 		private void ScriptXmlSchemaCollections()
