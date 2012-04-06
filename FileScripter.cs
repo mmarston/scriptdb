@@ -900,11 +900,13 @@ namespace Mercent.SqlServer.Management
 				string fileName = Path.Combine(relativeDir, "FullTextCatalogs.sql");
 				string outputFileName = Path.Combine(OutputDirectory, fileName);
 				ScriptingOptions options = new ScriptingOptions();
+				options.FileName = outputFileName;
+				options.ToFileOnly = true;
 				options.Encoding = Encoding;
 				options.AllowSystemObjects = false;
 				options.TargetServerVersion = this.TargetServerVersion;
 
-				Console.WriteLine(outputFileName);
+				Console.WriteLine(fileName);
 
 				Scripter scripter = new Scripter(server);
 				scripter.Options = options;
