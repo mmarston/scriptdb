@@ -2314,11 +2314,10 @@ namespace Mercent.SqlServer.Management
 				// If the index isn't unique then add all the rest of the non-computed columns
 				if(!bestIndex.IsUnique)
 				{
+					IndexedColumnCollection indexedColumns = bestIndex.IndexedColumns;
 					foreach(Column column in table.Columns)
 					{
-						if(!column.Computed
-							&& bestIndex.IndexedColumns.Contains(column.Name)
-							&& !bestIndex.IndexedColumns[column.Name].IsIncluded)
+						if(!column.Computed	&& (!indexedColumns.Contains(column.Name) || indexedColumns[column.Name].IsIncluded))
 						{
 							orderBy.Append(columnDelimiter);
 							orderBy.Append(MakeSqlBracket(column.Name));
