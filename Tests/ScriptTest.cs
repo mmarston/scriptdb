@@ -2091,6 +2091,22 @@ namespace Mercent.SqlServer.Management.Tests
 			}
 		}
 
+		[TestMethod]
+		public void TestScriptData()
+		{
+			Table table = database.Tables["Marketplace"];
+			ScriptingOptions options = new ScriptingOptions();
+			options.ScriptData = true;
+			options.ScriptSchema = false;
+			StringBuilder script = new StringBuilder();
+			foreach(string batch in table.EnumScript(options))
+			{
+				script.AppendLine(batch);
+				script.AppendLine("GO");
+			}
+			Console.WriteLine(script);
+		}
+
 		[Test]
 		public void TestScriptDataAsInsert()
 		{

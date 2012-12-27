@@ -61,6 +61,8 @@ namespace Mercent.SqlServer.Management
 			set { encoding = value; }
 		}
 
+		public bool TargetDataTools { get; set; }
+
 		private SqlServerVersion targetServerVersion = SqlServerVersion.Version110;
 		public SqlServerVersion TargetServerVersion
 		{
@@ -93,7 +95,9 @@ namespace Mercent.SqlServer.Management
 						{
 							foreach(string fileName in Directory.EnumerateFiles(directory, filePattern))
 							{
-								AddScriptFile(fileName, null);
+								// Get the path to the fileName relative to the OutputDirectory.
+								string relativePath = fileName.Substring(OutputDirectory.Length).TrimStart('/', '\\');
+								AddScriptFile(relativePath, null);
 							}
 						}
 					}
@@ -101,6 +105,11 @@ namespace Mercent.SqlServer.Management
 						AddScriptFile(ignoreLine, null);
 				}
 			}
+			// Ignore the bin and obj directories of an SSDT project.
+			// It doesn't hurt to always ignore these, so no need
+			// to wrap this in a check for if(TargetDataTools)...
+			AddScriptFile("bin", null);
+			AddScriptFile("obj", null);
 		}
 
 		
@@ -219,7 +228,7 @@ namespace Mercent.SqlServer.Management
 			// be initialized with the Name property having correct character case.
 			// Even when database names are not case sensitive, the Urn object is.
 			// In particular, when we compare Urns in the ScriptAssemblies method
-			// we need to database name to have the correct case.
+			// we need the database name to have the correct case.
 			database = server.Databases[databaseName];
 			// Get the database ID.
 			int databaseID = database.ID;
@@ -233,7 +242,10 @@ namespace Mercent.SqlServer.Management
 
 			PrefetchObjects();
 
-			ScriptDatabase();
+			if(!TargetDataTools)
+			{
+				ScriptDatabase();
+			}
 			ScriptFileGroups();
 			ScriptFullTextCatalogs();
 			ScriptRoles();
@@ -248,25 +260,17 @@ namespace Mercent.SqlServer.Management
 			ScriptUserDefinedDataTypes();
 			ScriptUserDefinedTableTypes();
 			ScriptSequences();
-			ScriptUserDefinedFunctionHeaders();
-			ScriptViewHeaders();
-			ScriptStoredProcedureHeaders();
+			if(!TargetDataTools)
+			{
+				ScriptUserDefinedFunctionHeaders();
+				ScriptViewHeaders();
+				ScriptStoredProcedureHeaders();
+			}
 			ScriptTables();
 			ScriptServiceBrokerQueues();
 			ScriptServiceBrokerServices();
 			ScriptUserDefinedFunctionsAndViews();
 			ScriptStoredProcedures();
-			
-			using(StreamWriter writer = new StreamWriter(Path.Combine(OutputDirectory, "CreateDatabaseObjects.sql"), false, Encoding))
-			{
-				writer.WriteLine(":on error exit");
-				foreach(ScriptFile file in this.scriptFiles.Where(f => f.Command != null))
-				{
-					writer.WriteLine("PRINT '{0}'", file.FileName);
-					writer.WriteLine("GO");
-					writer.WriteLine(file.Command);
-				}
-			}
 
 			// Here is a list of database objects that currently are not being scripted:
 			//database.AsymmetricKeys;
@@ -277,7 +281,21 @@ namespace Mercent.SqlServer.Management
 			//database.Triggers;
 			//database.Users;
 
-			AddScriptFile("CreateDatabaseObjects.sql", null);
+			if(!TargetDataTools)
+			{
+				using(StreamWriter writer = new StreamWriter(Path.Combine(OutputDirectory, "CreateDatabaseObjects.sql"), false, Encoding))
+				{
+					writer.WriteLine(":on error exit");
+					foreach(ScriptFile file in this.scriptFiles.Where(f => f.Command != null))
+					{
+						writer.WriteLine("PRINT '{0}'", file.FileName);
+						writer.WriteLine("GO");
+						writer.WriteLine(file.Command);
+					}
+				}
+
+				AddScriptFile("CreateDatabaseObjects.sql", null);
+			}
 
 			DirectoryInfo outputDirectoryInfo;
 			if(OutputDirectory != "")
@@ -611,13 +629,16 @@ namespace Mercent.SqlServer.Management
 			}
 			foreach(DirectoryInfo subDirInfo in dirInfo.GetDirectories())
 			{
-				if(subDirInfo.Attributes.HasFlag(FileAttributes.Hidden))
-					continue;
 				string relativeSubDir = Path.Combine(relativeDir, subDirInfo.Name);
-				PromptExtraFiles(subDirInfo, relativeSubDir);
-				// If the directory is empty and is not ignored, prompt about deleting it.
-				if(!subDirInfo.EnumerateFileSystemInfos().Any() && !ignoreFileSet.Contains(relativeSubDir))
+				// Skip the directory if it is hidden or in the file set (because it was in the ignore list).
+				if(subDirInfo.Attributes.HasFlag(FileAttributes.Hidden) || fileSet.Contains(relativeSubDir))
+					continue;
+				// If the directory is not empty then recursively call PromptExtraFiles...
+				if(subDirInfo.EnumerateFileSystemInfos().Any())
+					PromptExtraFiles(subDirInfo, relativeSubDir);
+				else
 				{
+					// If the directory is empty, prompt about deleting it.
 					Console.WriteLine("Empty directory: {0}", relativeSubDir);
 					char responseChar = this.allEmptyDirectoriesResponseChar;
 					if(allEmptyDirectoriesResponseChar == '\0')
@@ -676,9 +697,6 @@ namespace Mercent.SqlServer.Management
 				return;
 
 			ScriptingOptions options = new ScriptingOptions();
-			options.ToFileOnly = true;
-			options.AppendToFile = false;
-			options.Encoding = this.Encoding;
 			options.Permissions = true;
 			options.TargetServerVersion = this.TargetServerVersion;
 			
@@ -702,16 +720,28 @@ namespace Mercent.SqlServer.Management
 				DependencyTree tree;
 				foreach(SqlAssembly assembly in database.Assemblies)
 				{
+					// Skip system objects.
 					if(assembly.IsSystemObject)
 						continue;
 
 					string filename = Path.Combine(relativeDir, assembly.Name + ".sql");
-					options.FileName = Path.Combine(OutputDirectory, filename);
-					scripter.Options.AppendToFile = false;
+					string outputPath = Path.Combine(OutputDirectory, filename);
 					objects[0] = assembly;
 
-					Console.WriteLine(options.FileName);
-					scripter.ScriptWithList(objects);
+					Console.WriteLine(outputPath);
+					StringCollection script = script = scripter.ScriptWithList(objects);
+
+					// SSDT projects should reference assemblies by using an assembly or project reference,
+					// so we don't want to include the CREATE ASSEMBLY statement.
+					// I tried setting ScriptingOptions.PrimaryObject = false, but that didn't prevent
+					// the Scripter from scripting the CREATE ASSEMBLY statement.
+					// So we remove the first batch in the script.
+					// This may be the only batch in the script, but the script may also include permissions
+					// on the assembly.
+					if(TargetDataTools)
+						script.RemoveAt(0);
+					WriteBatches(outputPath, script);
+
 					// Check if the assembly is visible.
 					// If the assembly is visible then it can have CLR objects.
 					// If the assembly is not visible then it is intended to be called from
@@ -737,17 +767,21 @@ namespace Mercent.SqlServer.Management
 								}
 							}
 							// script out the dependent objects, appending to the file
-							scripter.Options.AppendToFile = true;
 							Urn[] children = new Urn[sortedChildren.Count];
 							sortedChildren.Values.CopyTo(children, 0);
-							scripter.ScriptWithList(children);
+							script = scripter.ScriptWithList(children);
+							WriteBatches(outputPath, true, script);
 						}
 					}
-					else
+					else if(!TargetDataTools)
 					{
 						// The create script doesn't include VISIBILITY (this appears
 						// to be a bug in SQL SMO) here we reset it and call Alter()
 						// to generate an alter statement.
+
+						// We don't include this for SSDT projects because visibility is set as
+						// a property of the assembly reference.
+
 						assembly.IsVisible = true;
 						assembly.IsVisible = false;
 						server.ConnectionContext.CapturedSql.Clear();
@@ -755,7 +789,7 @@ namespace Mercent.SqlServer.Management
 						StringCollection batches = server.ConnectionContext.CapturedSql.Text;
 						// Remove the first string, which is a USE statement to set the database context
 						batches.RemoveAt(0);
-						WriteBatches(options.FileName, true, batches);
+						WriteBatches(outputPath, true, batches);
 					}
 					assemblies.Add(assembly.Urn);
 				}
@@ -985,23 +1019,48 @@ namespace Mercent.SqlServer.Management
 					if(!Directory.Exists(dir))
 						Directory.CreateDirectory(dir);
 
+					if(TargetDataTools && table.HasClusteredIndex)
+					{
+						// SSDT doesn't like for the file group or partition scheme
+						// to be specified on the table and on the clustured index.
+						tableOptions.NoFileGroup = true;
+						tableOptions.NoTablePartitioningSchemes = true;
+						tableOptions.ScriptDataCompression = false;
+					}
+					else
+					{
+						tableOptions.NoFileGroup = false;
+						tableOptions.NoTablePartitioningSchemes = false;
+						tableOptions.ScriptDataCompression = true;
+					}
+
 					string fileName = Path.Combine(relativeDir, table.Name + ".sql");
 					AddScriptFile(fileName);
 					string outputFileName = Path.Combine(OutputDirectory, fileName);
 					Console.WriteLine(outputFileName);
 					WriteBatches(outputFileName, tableScripter.ScriptWithList(objects));
 
-					string kciFileName = Path.ChangeExtension(fileName, ".kci.sql");
-					kciFileNames.Add(kciFileName);
-					outputFileName = Path.Combine(OutputDirectory, kciFileName);
-					Console.WriteLine(outputFileName);
-					WriteBatches(outputFileName, kciScripter.ScriptWithList(objects));
+					// When targeting SSDT, use a single file for each table.
+					// Otherwise, create separate kci (key, constraint, index) and fky (foreign key) files.
+					if(TargetDataTools)
+					{
+						WriteBatches(outputFileName, true, kciScripter.ScriptWithList(objects));
+						WriteBatches(outputFileName, true, fkyScripter.ScriptWithList(objects));
+					}
+					else
+					{
+						string kciFileName = Path.ChangeExtension(fileName, ".kci.sql");
+						kciFileNames.Add(kciFileName);
+						outputFileName = Path.Combine(OutputDirectory, kciFileName);
+						Console.WriteLine(outputFileName);
+						WriteBatches(outputFileName, kciScripter.ScriptWithList(objects));
 
-					string fkyFileName = Path.ChangeExtension(fileName, ".fky.sql");
-					fkyFileNames.Add(fkyFileName);
-					outputFileName = Path.Combine(OutputDirectory, fkyFileName);
-					Console.WriteLine(outputFileName);
-					WriteBatches(outputFileName, fkyScripter.ScriptWithList(objects));
+						string fkyFileName = Path.ChangeExtension(fileName, ".fky.sql");
+						fkyFileNames.Add(fkyFileName);
+						outputFileName = Path.Combine(OutputDirectory, fkyFileName);
+						Console.WriteLine(outputFileName);
+						WriteBatches(outputFileName, fkyScripter.ScriptWithList(objects));
+					}
 
 					if(table.RowCount > 0)
 					{
@@ -1408,9 +1467,13 @@ namespace Mercent.SqlServer.Management
 				
 				objects[0] = view;
 				StringCollection script = viewScripter.ScriptWithList(objects);
-				// The 3rd bath in the script is the CREATE VIEW statement.
-				// Replace it with an ALTER VIEW statement.
-				script[2] = view.ScriptHeader(true) + view.TextBody;
+
+				if(!TargetDataTools)
+				{
+					// The 3rd batch in the script is the CREATE VIEW statement.
+					// Replace it with an ALTER VIEW statement.
+					script[2] = view.ScriptHeader(true) + view.TextBody;
+				}
 
 				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 				{
@@ -1419,8 +1482,11 @@ namespace Mercent.SqlServer.Management
 					foreach(Trigger trigger in view.Triggers)
 					{
 						objects[0] = trigger;
-						triggerScripter.Options = dropOptions;
-						WriteBatches(writer, triggerScripter.ScriptWithList(objects));
+						if(!TargetDataTools)
+						{
+							triggerScripter.Options = dropOptions;
+							WriteBatches(writer, triggerScripter.ScriptWithList(objects));
+						}
 						triggerScripter.Options = triggerOptions;
 						WriteBatches(writer, triggerScripter.ScriptWithList(objects));
 					}
@@ -1675,8 +1741,11 @@ namespace Mercent.SqlServer.Management
 				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 				{
 					objects[0] = sproc;
-					scripter.Options = dropOptions;
-					WriteBatches(writer, scripter.ScriptWithList(objects));
+					if(!TargetDataTools)
+					{
+						scripter.Options = dropOptions;
+						WriteBatches(writer, scripter.ScriptWithList(objects));
+					}
 					scripter.Options = options;
 					WriteBatches(writer, scripter.ScriptWithList(objects));
 				}
@@ -1793,9 +1862,12 @@ namespace Mercent.SqlServer.Management
 				Console.WriteLine(outputFileName);
 				objects[0] = udf;
 				StringCollection script = scripter.ScriptWithList(objects);
-				// The 3rd bath in the script is the CREATE FUNCTION statement.
-				// Replace it with an ALTER FUNCTION statement.
-				script[2] = udf.ScriptHeader(true) + udf.TextBody;
+				if(!TargetDataTools)
+				{
+					// The 3rd batch in the script is the CREATE FUNCTION statement.
+					// Replace it with an ALTER FUNCTION statement.
+					script[2] = udf.ScriptHeader(true) + udf.TextBody;
+				}
 				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 				{
 					WriteBatches(writer, script);
@@ -1884,8 +1956,12 @@ namespace Mercent.SqlServer.Management
 			options.Encoding = Encoding;
 			options.Permissions = true;
 			options.AllowSystemObjects = false;
-			options.IncludeIfNotExists = true;
 			options.TargetServerVersion = this.TargetServerVersion;
+			
+			if(!TargetDataTools)
+			{
+				options.IncludeIfNotExists = true;
+			}
 
 			Console.WriteLine(options.FileName);
 
@@ -1907,10 +1983,6 @@ namespace Mercent.SqlServer.Management
 						if(database.Roles.Contains(memberOfRole))
 						{
 							string addToRoleScript = ScriptAddToRole(role, memberOfRole, options);
-							// In SQL 2008 R2 SMO the ScriptAddToRole method includes EXEC. But SQL 2008 before R2 did not.
-							// This change will work whether or not SMO has been updated to R2 on the user's machine.
-							if(!addToRoleScript.StartsWith("EXEC", StringComparison.InvariantCultureIgnoreCase))
-								writer.Write("EXEC ");
 							writer.WriteLine(addToRoleScript);
 							writer.WriteLine("GO");
 						}
@@ -1952,9 +2024,13 @@ namespace Mercent.SqlServer.Management
 			options.Encoding = Encoding;
 			options.Permissions = true;
 			options.AllowSystemObjects = false;
-			options.IncludeIfNotExists = true;
 			options.ScriptOwner = true;
 			options.TargetServerVersion = this.TargetServerVersion;
+
+			if(!TargetDataTools)
+			{
+				options.IncludeIfNotExists = true;
+			}
 
 			Console.WriteLine(options.FileName);
 
@@ -1984,9 +2060,13 @@ namespace Mercent.SqlServer.Management
 				options.ToFileOnly = true;
 				options.Encoding = Encoding;
 				options.AllowSystemObjects = false;
-				options.IncludeIfNotExists = true;
 				options.Permissions = true;
 				options.TargetServerVersion = this.TargetServerVersion;
+
+				if(!TargetDataTools)
+				{
+					options.IncludeIfNotExists = true;
+				}
 
 				Scripter scripter = new Scripter(server);
 				scripter.Options = options;
@@ -2459,7 +2539,13 @@ namespace Mercent.SqlServer.Management
 		{
 			foreach(string batch in script)
 			{
-				writer.WriteLine(batch.Trim());
+				string trimmedBatch = batch.Trim();
+				// When targetting SSDT (data tools), skip SET statements.
+				// When a script contains a SET statement, SSDT fails to build the project and returns this error:
+				// "SQL70001: This statement is not recognized in this context."
+				if(TargetDataTools && trimmedBatch.StartsWith("SET", StringComparison.OrdinalIgnoreCase))
+					continue;
+				writer.WriteLine(trimmedBatch);
 				writer.WriteLine("GO");
 			}
 		}
