@@ -37,17 +37,20 @@ matter).
 
 ###Tables
 Tables are scripted out into separate files in order to handle dependencies.
+
+In the Schemas\_schema_\Tables directory:
 _table_.sql creates the table with only the table column definitions.
 _table_.kci.sql adds keys, constaints and indexes to the table.
 _table_.fky.sql adds foreign keys.
 
-_table_.sql in the _schema_\Data directory adds data to the table.
+In the Schemas\schema_\Data
+_table_.sql adds data to the table.
 
 Table scripts are run in this order:
-1. All _table_.sql scripts
+1. All Tables\_table_.sql scripts
 2. All Data\_table_.sql scripts
-3. All _table_.kci.sql scripts
-4. All _table.fky.sql scripts
+3. All Tables\_table_.kci.sql scripts
+4. All Tables\_table.fky.sql scripts
 
 Data is added before the creation of indexes to reduce fragmentation.
 Foreign keys are added last to ensure that the data they refer to has already been inserted.
@@ -56,8 +59,12 @@ Foreign keys are added last to ensure that the data they refer to has already be
 Roles are included in the scripting process while Users intentially left out.
 These should be re-added in each environment that the database is recreated in.
 
+##Dependencies
+ScriptDB depends on SQL Server Management Objects (SMO), which can be downloaded here:
+<http://go.microsoft.com/fwlink/?LinkID=239658&clcid=0x409>
+
 ##Unsuported SQL Server features
-Datatypes added in SQL Server 2012 are suported (HierarchyID, Geography, etc.)
+Datatypes added in SQL Server 2012 are not suported (HierarchyID, Geography, etc.)
 
 The following are not included in the scripts:
 
