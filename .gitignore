@@ -1,1 +1,4 @@
 /TestResults
+*.suo
+[Bb]in/
+[Oo]bj/
