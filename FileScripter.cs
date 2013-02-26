@@ -25,6 +25,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Xml;
+using System.Xml.Linq;
 
 using Microsoft.SqlServer.Management.Smo;
 using Microsoft.SqlServer.Management.Smo.Broker;
@@ -45,6 +46,7 @@ namespace Mercent.SqlServer.Management
 		private Char allEmptyDirectoriesResponseChar = '\0';
 
 		private static readonly string DBName = "$(DBNAME)";
+		private static readonly HashSet<string> knownExtensions = new HashSet<string>(new [] { ".sql", ".dat", ".fmt", ".udat" }, StringComparer.OrdinalIgnoreCase);
 		
 		private string serverName;
 		public string ServerName
@@ -154,10 +156,18 @@ namespace Mercent.SqlServer.Management
 			AddScriptFile(new ScriptFile(fileName, command));
 		}
 
-		private void AddDataFile(string fileName, string schema, string table)
+		private void AddDataFile(string dataFile, string schema, string table)
 		{
-			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -N -k -E", FileScripter.DBName, schema, table, fileName);
-			AddScriptFile(fileName, command);
+			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -N -k -E", FileScripter.DBName, schema, table, dataFile);
+			AddScriptFile(dataFile, command);
+		}
+
+		private void AddUtf16DataFile(string dataFile, string schema, string table)
+		{
+			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
+			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -k -E -f \"{4}\"", FileScripter.DBName, schema, table, dataFile, formatFile);
+			AddScriptFile(dataFile, command);
+			AddScriptFile(formatFile, null);
 		}
 
 		private void AddScriptFileRange(IEnumerable<string> fileNames)
@@ -597,8 +607,8 @@ namespace Mercent.SqlServer.Management
 			string relativeName;
 			foreach(FileInfo fileInfo in dirInfo.GetFiles())
 			{
-				// Skip over the file if it isn't a .sql or .dat file.
-				if(!String.Equals(fileInfo.Extension, ".sql", StringComparison.OrdinalIgnoreCase) && !String.Equals(fileInfo.Extension, ".dat", StringComparison.OrdinalIgnoreCase))
+				// Skip over the file if it isn't a known extension (.sql, .dat, .udat, .fmt).
+				if(!knownExtensions.Contains(fileInfo.Extension))
 					continue;
 				relativeName = Path.Combine(relativeDir, fileInfo.Name);
 				if(!fileSet.Contains(relativeName))
@@ -1077,27 +1087,21 @@ namespace Mercent.SqlServer.Management
 
 					if(table.RowCount > 0)
 					{
-						string relativeDataDir = Path.Combine("Schemas", table.Schema, "Data");
-						string dataDir = Path.Combine(OutputDirectory, relativeDataDir);
-						if(!Directory.Exists(dataDir))
-							Directory.CreateDirectory(dataDir);
-					
-						// If the table has more than 50,000 rows then we will use BCP.
+						// If the table has more than 50,000 rows then we will use BCP with a Unicode native format.
+						// This format is more efficient (both in file size and performance) but is a binary file
+						// that doesn't diff or merge well.
 						if(table.RowCount > 50000)
 						{
-							fileName = Path.Combine(relativeDataDir, table.Name + ".dat");
-							AddDataFile(fileName, table.Schema, table.Name);
-							outputFileName = Path.Combine(OutputDirectory, fileName);
-							Console.WriteLine(outputFileName);
-							BulkCopyTableData(table, outputFileName);
+							BulkCopyTableData(table);
 						}
 						else
 						{
-							fileName = Path.Combine(relativeDataDir, table.Name + ".sql");
-							AddScriptFile(fileName);
-							outputFileName = Path.Combine(OutputDirectory, fileName);
-							Console.WriteLine(outputFileName);
-							ScriptTableData(table, outputFileName);
+							// Otherwise use BCP with a custom Unicode character format.
+							// This format is designed to allow the file to be viewed in a text editor,
+							// diff'd and merged.
+							// For tables that have more than a few rows, this method runs faster than INSERT statements
+							// when deploying the database (see the ScriptTableData method, which is no longer used).
+							BulkCopyTableDataUtf16(table);
 						}
 					}
 				}
@@ -1106,6 +1110,7 @@ namespace Mercent.SqlServer.Management
 			AddScriptFileRange(fkyFileNames);
 		}
 
+		[Obsolete("This method is no longer used since all data is now using bcp (either Unicode native format or custom Unicode character format).")]
 		private void ScriptTableData(Table table, string fileName)
 		{
 			int maxBatchSize = 1000;
@@ -1246,20 +1251,226 @@ namespace Mercent.SqlServer.Management
 			}
 		}
 
-		private void BulkCopyTableData(Table table, string fileName)
+		/// <summary>
+		/// Scripts out a table's data using bcp Unicode native format (-N).
+		/// </summary>
+		private void BulkCopyTableData(Table table)
 		{
-			// bcp [database].[schema].[table] out filename -S servername -T -N
+			string relativeDataDir = Path.Combine("Schemas", table.Schema, "Data");
+			string dataDir = Path.Combine(OutputDirectory, relativeDataDir);
+			if(!Directory.Exists(dataDir))
+				Directory.CreateDirectory(dataDir);
+
+			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".dat");
+			AddDataFile(relativeDataFile, table.Schema, table.Name);
+
+			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
+			Console.WriteLine(dataFile);
+
+			// Run bcp to create the data file.
+			// bcp "[database].[schema].[table]" out "dataFile" -S servername -T -N
 			string bcpArguments = String.Format
 			(
 				"\"{0}.{1}.{2}\" out \"{3}\" -S {4} -T -N",
 				MakeSqlBracket(this.DatabaseName),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
-				fileName,
+				dataFile,
 				this.ServerName
 			);
 
-			ProcessStartInfo bcpStartInfo = new ProcessStartInfo("bcp.exe", bcpArguments);
+			RunBcp(bcpArguments);
+		}
+
+		/// <summary>
+		/// Scripts out a table's data using a custom Unicode character bcp format.
+		/// </summary>
+		/// <remarks>
+		/// This format is 
+		/// </remarks>
+		private void BulkCopyTableDataUtf16(Table table)
+		{
+			string relativeDataDir = Path.Combine("Schemas", table.Schema, "Data");
+			string dataDir = Path.Combine(OutputDirectory, relativeDataDir);
+			if(!Directory.Exists(dataDir))
+				Directory.CreateDirectory(dataDir);
+
+			// We use the ".udat" extension to distinguish it from other .dat files so that
+			// a text editor can be associated with the extension and so that source control
+			// systems can be configured to handle it appropriately.
+			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".udat");
+			AddUtf16DataFile(relativeDataFile, table.Schema, table.Name);
+
+			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
+			string tmpDataFile = dataFile + ".tmp";
+			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
+			Console.WriteLine(dataFile);
+			
+			// Run bcp to create the format file.
+			// bcp [database].[schema].[table] format nul -S servername -T -w -f formatFile -x
+			string bcpArguments = String.Format
+			(
+				"\"{0}.{1}.{2}\" format nul -S {3} -T -w -f \"{4}\" -x",
+				MakeSqlBracket(this.DatabaseName),
+				MakeSqlBracket(table.Schema),
+				MakeSqlBracket(table.Name),
+				this.ServerName,
+				formatFile
+			);
+
+			RunBcp(bcpArguments);
+
+			// Modify the format file so that the data file will be formatted how we want it to be.
+			ModifyOutUtf16BcpFormatFile(formatFile);
+
+			// Run bcp to create the data file.
+			// bcp "SELECT CONVERT(nvarchar(2), null), * FROM [database].[schema].[table]" queryout tmpDataFile -S servername -T -f formatFile
+			bcpArguments = String.Format
+			(
+				"\"SELECT CONVERT(nvarchar(2), null), * FROM {0}.{1}.{2}\" queryout \"{3}\" -S {4} -T -f \"{5}\"",
+				MakeSqlBracket(this.DatabaseName),
+				MakeSqlBracket(table.Schema),
+				MakeSqlBracket(table.Name),
+				tmpDataFile,
+				this.ServerName,
+				formatFile
+			);
+
+			RunBcp(bcpArguments);
+
+			// In order to ensure that Visual Studio, Notepad, and other editors open the file correctly,
+			// add UTF16 byte order mark to the start of the data file. Unfortunately, the only way to do
+			// this is to copy the file (that is why we have bcp write to a tmp file).
+			CopyUtf16BcpDataFile(tmpDataFile, dataFile);
+
+			// Modify the format file so that it can be used by bcp to load data into the database.
+			ModifyInUtf16BcpFormatFile(formatFile);
+		}
+
+		/// <summary>
+		/// Copies data from a temporary bcp file to a destination data file, adding a byte order mark, and then deletes the temp file.
+		/// </summary>
+		private void CopyUtf16BcpDataFile(string tmpDataFile, string dataFile)
+		{
+			using(Stream source = new FileStream(tmpDataFile, FileMode.Open, FileAccess.Read, FileShare.Delete | FileShare.Read))
+			using(Stream destination = new FileStream(dataFile, FileMode.OpenOrCreate, FileAccess.ReadWrite))
+			{
+				// Write the byte order mark.
+				destination.Write(new byte[]{ 0xff, 0xfe }, 0, 2);
+
+				// Copy data from the tmp file.
+				source.CopyTo(destination);
+				
+				// Since we are overwriting the destination, ensure to set the proper length (in case the new data is smaller).
+				destination.SetLength(destination.Position);
+			}
+			File.Delete(tmpDataFile);
+		}
+
+		private string EscapeUtf16BcpTerminator(string value)
+		{
+			StringBuilder result = new StringBuilder(value.Length * 3);
+			foreach(char ch in value)
+			{
+				result.Append(ch);
+				result.Append(@"\0");
+			}
+			return result.ToString();
+		}
+
+		/// <summary>
+		/// Modifies a bcp format file to output a data file with a format similar to JSON.
+		/// </summary>
+		/// <remarks>
+		/// This format is designed to be source-control friendly for diff and merge operations.
+		/// Note that the occurences of "\r", "\n", and "\0" in the terminator actually do contain
+		/// backslashes that should show up in the XML format file as backslashes.
+		/// This method adds an extra "padding" column so that the terminator of this column will look
+		/// like the label for the first column.
+		/// </remarks>
+		private void ModifyOutUtf16BcpFormatFile(string formatFile)
+		{
+			XElement formatElement = XElement.Load(formatFile);
+			XNamespace ns = "http://schemas.microsoft.com/sqlserver/2004/bulkload/format";
+			XNamespace xsi = "http://www.w3.org/2001/XMLSchema-instance";
+
+			// The format file has a "RECORD" that contains "FIELD" elements that describe the
+			// format of data field in the data file.
+			XElement record = formatElement.Element(ns + "RECORD");
+
+			// The format file also has a "ROW" that contains "COLUMN" elements that describe the
+			// schema of the rows in SQL (name and SQL data type).
+			XElement row = formatElement.Element(ns + "ROW");
+
+			string firstColumnName = (string)row.Element(ns + "COLUMN").Attribute("NAME");
+
+			// Add a blank padding field to the start of the record.
+			XElement paddingField = new XElement
+			(
+				ns + "FIELD",
+				new XAttribute("ID", 0),
+				new XAttribute(xsi + "type", "NCharTerm"),
+				new XAttribute("TERMINATOR", @"{\0\r\0\n\0\t\0" + EscapeUtf16BcpTerminator(firstColumnName) + @":\0 \0"),
+				new XAttribute("MAX_LENGTH", 2)
+			);
+			record.AddFirst(paddingField);
+
+			// Add a blank padding column to the start of the row.
+			XElement paddingColumn = new XElement
+			(
+				ns + "COLUMN",
+				new XAttribute("SOURCE", 0),
+				new XAttribute("NAME", "__Padding__"),
+				new XAttribute(xsi + "type", "SQLVARYCHAR")
+			);
+			row.AddFirst(paddingColumn);
+
+			// Get an array of the fields.
+			var fields = record.Elements(ns + "FIELD").ToArray();
+
+			// Get an array of the columns.
+			var columns = row.Elements(ns + "COLUMN").ToArray();
+
+			// Loop through all the fields/columns except the first and last one.
+			for(int index = 1; index < fields.Length - 1; index++)
+			{
+				var field = fields[index];
+				var column = columns[index + 1];
+				string columnName = (string)column.Attribute("NAME");
+				string terminator = @",\0\r\0\n\0\t\0" + EscapeUtf16BcpTerminator(columnName) + @":\0 \0";
+				field.SetAttributeValue("TERMINATOR", terminator);
+			}
+
+			// Set the terminator for the last field.
+			fields.Last().SetAttributeValue("TERMINATOR", @"\r\0\n\0}\0\r\0\n\0");
+
+			// Overwrite the format file.
+			formatElement.Save(formatFile);
+		}
+
+		/// <summary>
+		/// Modifies a bcp format file to load a data file with a format similar to JSON.
+		/// </summary>
+		/// <remarks>
+		/// This method expects a format file that has already been modified by <see cref="ModifyOutBcpFormatFile"/>.
+		/// This method will remove the "padding" column from the "ROW" but leave the corresponding field in the "RECORD".
+		/// </remarks>
+		private void ModifyInUtf16BcpFormatFile(string formatFile)
+		{
+			XElement formatElement = XElement.Load(formatFile);
+			XNamespace ns = "http://schemas.microsoft.com/sqlserver/2004/bulkload/format";
+			
+			// Remove the first "COLUMN" element from the "ROW".
+			XElement row = formatElement.Element(ns + "ROW");
+			row.Element(ns + "COLUMN").Remove();
+
+			// Overwrite the format file.
+			formatElement.Save(formatFile);
+		}
+
+		private void RunBcp(string arguments)
+		{
+			ProcessStartInfo bcpStartInfo = new ProcessStartInfo("bcp.exe", arguments);
 			bcpStartInfo.CreateNoWindow = true;
 			bcpStartInfo.UseShellExecute = false;
 			bcpStartInfo.RedirectStandardError = true;
