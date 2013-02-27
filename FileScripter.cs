@@ -46,7 +46,7 @@ namespace Mercent.SqlServer.Management
 		private Char allEmptyDirectoriesResponseChar = '\0';
 
 		private static readonly string DBName = "$(DBNAME)";
-		private static readonly HashSet<string> knownExtensions = new HashSet<string>(new [] { ".sql", ".dat", ".fmt", ".udat" }, StringComparer.OrdinalIgnoreCase);
+		private static readonly HashSet<string> knownExtensions = new HashSet<string>(new [] { ".sql", ".dat", ".fmt", ".udat", ".txt" }, StringComparer.OrdinalIgnoreCase);
 		
 		private string serverName;
 		public string ServerName
@@ -156,7 +156,7 @@ namespace Mercent.SqlServer.Management
 			AddScriptFile(new ScriptFile(fileName, command));
 		}
 
-		private void AddDataFile(string dataFile, string schema, string table)
+		private void AddUnicodeNativeDataFile(string dataFile, string schema, string table)
 		{
 			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -N -k -E", FileScripter.DBName, schema, table, dataFile);
 			AddScriptFile(dataFile, command);
@@ -166,6 +166,14 @@ namespace Mercent.SqlServer.Management
 		{
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
 			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -k -E -f \"{4}\"", FileScripter.DBName, schema, table, dataFile, formatFile);
+			AddScriptFile(dataFile, command);
+			AddScriptFile(formatFile, null);
+		}
+
+		private void AddCodePageDataFile(string dataFile, string schema, string table, string codePage)
+		{
+			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
+			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -C {4} -k -E -f \"{5}\"", FileScripter.DBName, schema, table, dataFile, codePage, formatFile);
 			AddScriptFile(dataFile, command);
 			AddScriptFile(formatFile, null);
 		}
@@ -253,6 +261,9 @@ namespace Mercent.SqlServer.Management
 			// In particular, when we compare Urns in the ScriptAssemblies method
 			// we need the database name to have the correct case.
 			database = server.Databases[databaseName];
+			if(database == null)
+				throw new KeyNotFoundException("The database '" + databaseName + "' was not found.");
+
 			// Get the database ID.
 			int databaseID = database.ID;
 			// Create a new server connection because the old server connection has
@@ -1087,21 +1098,23 @@ namespace Mercent.SqlServer.Management
 
 					if(table.RowCount > 0)
 					{
-						// If the table has more than 50,000 rows then we will use BCP with a Unicode native format.
-						// This format is more efficient (both in file size and performance) but is a binary file
-						// that doesn't diff or merge well.
+						// If the table has more than 50,000 rows then we will use BCP with a compact text format.
+						// We used to use Unicode native format (see BulkCopyTableDataUnicodeNative method) but
+						// the Unicode native format is a binary file that doesn't diff or merge well.
+						// The compact text format is larger than the binary format but is more compact than the
+						// full JSON-like text format used for tables with fewer rows.
 						if(table.RowCount > 50000)
 						{
-							BulkCopyTableData(table);
+							BulkCopyTableDataCompactCodePage(table, "1252");
 						}
 						else
 						{
-							// Otherwise use BCP with a custom Unicode character format.
+							// Otherwise use BCP with a custom JSON-like text format.
 							// This format is designed to allow the file to be viewed in a text editor,
 							// diff'd and merged.
 							// For tables that have more than a few rows, this method runs faster than INSERT statements
 							// when deploying the database (see the ScriptTableData method, which is no longer used).
-							BulkCopyTableDataUtf16(table);
+							BulkCopyTableDataCodePage(table, "1252");
 						}
 					}
 				}
@@ -1254,7 +1267,7 @@ namespace Mercent.SqlServer.Management
 		/// <summary>
 		/// Scripts out a table's data using bcp Unicode native format (-N).
 		/// </summary>
-		private void BulkCopyTableData(Table table)
+		private void BulkCopyTableDataUnicodeNative(Table table)
 		{
 			string relativeDataDir = Path.Combine("Schemas", table.Schema, "Data");
 			string dataDir = Path.Combine(OutputDirectory, relativeDataDir);
@@ -1262,19 +1275,20 @@ namespace Mercent.SqlServer.Management
 				Directory.CreateDirectory(dataDir);
 
 			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".dat");
-			AddDataFile(relativeDataFile, table.Schema, table.Name);
+			AddUnicodeNativeDataFile(relativeDataFile, table.Schema, table.Name);
 
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
 			Console.WriteLine(dataFile);
 
 			// Run bcp to create the data file.
-			// bcp "[database].[schema].[table]" out "dataFile" -S servername -T -N
+			// bcp "SELECT * FROM [database].[schema].[table] ORDER BY ..." queryout "dataFile" -S servername -T -N
 			string bcpArguments = String.Format
 			(
-				"\"{0}.{1}.{2}\" out \"{3}\" -S {4} -T -N",
+				"\"SELECT * FROM {0}.{1}.{2} {3}\" out \"{4}\" -S {5} -T -N",
 				MakeSqlBracket(this.DatabaseName),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
+				GetOrderByClauseForTable(table),
 				dataFile,
 				this.ServerName
 			);
@@ -1285,9 +1299,6 @@ namespace Mercent.SqlServer.Management
 		/// <summary>
 		/// Scripts out a table's data using a custom Unicode character bcp format.
 		/// </summary>
-		/// <remarks>
-		/// This format is 
-		/// </remarks>
 		private void BulkCopyTableDataUtf16(Table table)
 		{
 			string relativeDataDir = Path.Combine("Schemas", table.Schema, "Data");
@@ -1305,7 +1316,7 @@ namespace Mercent.SqlServer.Management
 			string tmpDataFile = dataFile + ".tmp";
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
 			Console.WriteLine(dataFile);
-			
+
 			// Run bcp to create the format file.
 			// bcp [database].[schema].[table] format nul -S servername -T -w -f formatFile -x
 			string bcpArguments = String.Format
@@ -1327,10 +1338,11 @@ namespace Mercent.SqlServer.Management
 			// bcp "SELECT CONVERT(nvarchar(2), null), * FROM [database].[schema].[table]" queryout tmpDataFile -S servername -T -f formatFile
 			bcpArguments = String.Format
 			(
-				"\"SELECT CONVERT(nvarchar(2), null), * FROM {0}.{1}.{2}\" queryout \"{3}\" -S {4} -T -f \"{5}\"",
+				"\"SELECT CONVERT(nvarchar(2), null), * FROM {0}.{1}.{2} {3}\" queryout \"{4}\" -S {5} -T -f \"{6}\"",
 				MakeSqlBracket(this.DatabaseName),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
+				GetOrderByClauseForTable(table),
 				tmpDataFile,
 				this.ServerName,
 				formatFile
@@ -1345,6 +1357,128 @@ namespace Mercent.SqlServer.Management
 
 			// Modify the format file so that it can be used by bcp to load data into the database.
 			ModifyInUtf16BcpFormatFile(formatFile);
+		}
+
+		/// <summary>
+		/// Scripts out a table's data using a custom character bcp format using the specified code page.
+		/// </summary>
+		/// <remarks>
+		/// The codePage parameter is a string because BCP also supports "ACP", "OEM", and "RAW" in addition
+		/// to numeric code pages.
+		/// </remarks>
+		private void BulkCopyTableDataCodePage(Table table, string codePage = "1252")
+		{
+			string relativeDataDir = Path.Combine("Schemas", table.Schema, "Data");
+			string dataDir = Path.Combine(OutputDirectory, relativeDataDir);
+			if(!Directory.Exists(dataDir))
+				Directory.CreateDirectory(dataDir);
+
+			// We use the ".txt" extension to treat it as a text file.
+			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".txt");
+			AddCodePageDataFile(relativeDataFile, table.Schema, table.Name, codePage);
+
+			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
+			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
+			Console.WriteLine(dataFile);
+			
+			// Run bcp to create the format file.
+			// bcp [database].[schema].[table] format nul -S servername -T -c -C codePage -f formatFile -x
+			string bcpArguments = String.Format
+			(
+				"\"{0}.{1}.{2}\" format nul -S {3} -T -c -C {4} -f \"{5}\" -x",
+				MakeSqlBracket(this.DatabaseName),
+				MakeSqlBracket(table.Schema),
+				MakeSqlBracket(table.Name),
+				this.ServerName,
+				codePage,
+				formatFile
+			);
+
+			RunBcp(bcpArguments);
+
+			// Modify the format file so that the data file will be formatted how we want it to be.
+			ModifyOutCodePageBcpFormatFile(formatFile);
+
+			// Run bcp to create the data file.
+			// bcp "SELECT CONVERT(nvarchar(2), null), * FROM [database].[schema].[table]" queryout tmpDataFile -S servername -T -C codePage -f formatFile
+			bcpArguments = String.Format
+			(
+				"\"SELECT CONVERT(nvarchar(2), null), * FROM {0}.{1}.{2} {3}\" queryout \"{4}\" -S {5} -T -C {6} -f \"{7}\"",
+				MakeSqlBracket(this.DatabaseName),
+				MakeSqlBracket(table.Schema),
+				MakeSqlBracket(table.Name),
+				GetOrderByClauseForTable(table),
+				dataFile,
+				this.ServerName,
+				codePage,
+				formatFile
+			);
+
+			RunBcp(bcpArguments);
+
+			// Modify the format file so that it can be used by bcp to load data into the database.
+			ModifyInCodePageBcpFormatFile(formatFile);
+		}
+
+		/// <summary>
+		/// Scripts out a table's data using a custom character bcp format using the specified code page.
+		/// </summary>
+		/// <remarks>
+		/// The codePage parameter is a string because BCP also supports "ACP", "OEM", and "RAW" in addition
+		/// to numeric code pages.
+		/// </remarks>
+		private void BulkCopyTableDataCompactCodePage(Table table, string codePage = "1252")
+		{
+			string relativeDataDir = Path.Combine("Schemas", table.Schema, "Data");
+			string dataDir = Path.Combine(OutputDirectory, relativeDataDir);
+			if(!Directory.Exists(dataDir))
+				Directory.CreateDirectory(dataDir);
+
+			// We use the ".txt" extension to treat it as a text file.
+			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".txt");
+			AddCodePageDataFile(relativeDataFile, table.Schema, table.Name, codePage);
+
+			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
+			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
+			Console.WriteLine(dataFile);
+
+			// Run bcp to create the format file.
+			// bcp [database].[schema].[table] format nul -S servername -T -c -C codePage -f formatFile -x
+			string bcpArguments = String.Format
+			(
+				"\"{0}.{1}.{2}\" format nul -S {3} -T -c -C {4} -f \"{5}\" -x",
+				MakeSqlBracket(this.DatabaseName),
+				MakeSqlBracket(table.Schema),
+				MakeSqlBracket(table.Name),
+				this.ServerName,
+				codePage,
+				formatFile
+			);
+
+			RunBcp(bcpArguments);
+
+			// Modify the format file so that the data file will be formatted how we want it to be.
+			ModifyOutCompactCodePageBcpFormatFile(formatFile);
+
+			// Run bcp to create the data file.
+			// bcp "SELECT CONVERT(nvarchar(2), null), * FROM [database].[schema].[table]" queryout tmpDataFile -S servername -T -C codePage -f formatFile
+			bcpArguments = String.Format
+			(
+				"\"SELECT CONVERT(nvarchar(2), null), * FROM {0}.{1}.{2} {3}\" queryout \"{4}\" -S {5} -T -C {6} -f \"{7}\"",
+				MakeSqlBracket(this.DatabaseName),
+				MakeSqlBracket(table.Schema),
+				MakeSqlBracket(table.Name),
+				GetOrderByClauseForTable(table),
+				dataFile,
+				this.ServerName,
+				codePage,
+				formatFile
+			);
+
+			RunBcp(bcpArguments);
+
+			// Modify the format file so that it can be used by bcp to load data into the database.
+			ModifyInCodePageBcpFormatFile(formatFile);
 		}
 
 		/// <summary>
@@ -1457,9 +1591,162 @@ namespace Mercent.SqlServer.Management
 		/// </remarks>
 		private void ModifyInUtf16BcpFormatFile(string formatFile)
 		{
+			// There is currently no difference in behavior for modifying the Utf16 vs CodePage format file.
+			ModifyInCodePageBcpFormatFile(formatFile);
+		}
+
+		/// <summary>
+		/// Modifies a bcp format file to output a data file with a format similar to JSON.
+		/// </summary>
+		/// <remarks>
+		/// This format is designed to be source-control friendly for diff and merge operations.
+		/// Note that the occurences of "\r" and "\n" in the terminator actually do contain
+		/// backslashes that should show up in the XML format file as backslashes.
+		/// This method adds an extra "padding" column so that the terminator of this column will look
+		/// like the label for the first column.
+		/// </remarks>
+		private void ModifyOutCodePageBcpFormatFile(string formatFile)
+		{
 			XElement formatElement = XElement.Load(formatFile);
 			XNamespace ns = "http://schemas.microsoft.com/sqlserver/2004/bulkload/format";
-			
+			XNamespace xsi = "http://www.w3.org/2001/XMLSchema-instance";
+
+			// The format file has a "RECORD" that contains "FIELD" elements that describe the
+			// format of data field in the data file.
+			XElement record = formatElement.Element(ns + "RECORD");
+
+			// The format file also has a "ROW" that contains "COLUMN" elements that describe the
+			// schema of the rows in SQL (name and SQL data type).
+			XElement row = formatElement.Element(ns + "ROW");
+
+			string firstColumnName = (string)row.Element(ns + "COLUMN").Attribute("NAME");
+
+			// Add a blank padding field to the start of the record.
+			XElement paddingField = new XElement
+			(
+				ns + "FIELD",
+				new XAttribute("ID", 0),
+				new XAttribute(xsi + "type", "CharTerm"),
+				new XAttribute("TERMINATOR", @"{\r\n\t" + firstColumnName + @": "),
+				new XAttribute("MAX_LENGTH", 2)
+			);
+			record.AddFirst(paddingField);
+
+			// Add a blank padding column to the start of the row.
+			XElement paddingColumn = new XElement
+			(
+				ns + "COLUMN",
+				new XAttribute("SOURCE", 0),
+				new XAttribute("NAME", "__Padding__"),
+				new XAttribute(xsi + "type", "SQLVARYCHAR")
+			);
+			row.AddFirst(paddingColumn);
+
+			// Get an array of the fields.
+			var fields = record.Elements(ns + "FIELD").ToArray();
+
+			// Get an array of the columns.
+			var columns = row.Elements(ns + "COLUMN").ToArray();
+
+			// Loop through all the fields/columns except the first and last one.
+			for(int index = 1; index < fields.Length - 1; index++)
+			{
+				var field = fields[index];
+				var column = columns[index + 1];
+				string columnName = (string)column.Attribute("NAME");
+				string terminator = @",\r\n\t" + columnName + @": ";
+				field.SetAttributeValue("TERMINATOR", terminator);
+			}
+
+			// Set the terminator for the last field.
+			fields.Last().SetAttributeValue("TERMINATOR", @"\r\n}\r\n");
+
+			// Overwrite the format file.
+			formatElement.Save(formatFile);
+		}
+
+		/// <summary>
+		/// Modifies a bcp format file to output a data file with a format similar to JSON.
+		/// </summary>
+		/// <remarks>
+		/// This format is designed to be source-control friendly for diff and merge operations.
+		/// Note that the occurences of "\r" and "\n" in the terminator actually do contain
+		/// backslashes that should show up in the XML format file as backslashes.
+		/// This method adds an extra "padding" column so that the terminator of this column will look
+		/// like the label for the first column.
+		/// </remarks>
+		private void ModifyOutCompactCodePageBcpFormatFile(string formatFile)
+		{
+			XElement formatElement = XElement.Load(formatFile);
+			XNamespace ns = "http://schemas.microsoft.com/sqlserver/2004/bulkload/format";
+			XNamespace xsi = "http://www.w3.org/2001/XMLSchema-instance";
+
+			// The format file has a "RECORD" that contains "FIELD" elements that describe the
+			// format of data field in the data file.
+			XElement record = formatElement.Element(ns + "RECORD");
+
+			// The format file also has a "ROW" that contains "COLUMN" elements that describe the
+			// schema of the rows in SQL (name and SQL data type).
+			XElement row = formatElement.Element(ns + "ROW");
+
+			string firstColumnName = (string)row.Element(ns + "COLUMN").Attribute("NAME");
+
+			// Add a blank padding field to the start of the record.
+			XElement paddingField = new XElement
+			(
+				ns + "FIELD",
+				new XAttribute("ID", 0),
+				new XAttribute(xsi + "type", "CharTerm"),
+				new XAttribute("TERMINATOR", "«"),
+				new XAttribute("MAX_LENGTH", 2)
+			);
+			record.AddFirst(paddingField);
+
+			// Add a blank padding column to the start of the row.
+			XElement paddingColumn = new XElement
+			(
+				ns + "COLUMN",
+				new XAttribute("SOURCE", 0),
+				new XAttribute("NAME", "__Padding__"),
+				new XAttribute(xsi + "type", "SQLVARYCHAR")
+			);
+			row.AddFirst(paddingColumn);
+
+			// Get an array of the fields.
+			var fields = record.Elements(ns + "FIELD").ToArray();
+
+			// Get an array of the columns.
+			var columns = row.Elements(ns + "COLUMN").ToArray();
+
+			// Loop through all the fields/columns except the first and last one.
+			for(int index = 1; index < fields.Length - 1; index++)
+			{
+				var field = fields[index];
+				var column = columns[index + 1];
+				string columnName = (string)column.Attribute("NAME");
+				string terminator = "»,«";
+				field.SetAttributeValue("TERMINATOR", terminator);
+			}
+
+			// Set the terminator for the last field.
+			fields.Last().SetAttributeValue("TERMINATOR", @"»;\r\n");
+
+			// Overwrite the format file.
+			formatElement.Save(formatFile);
+		}
+
+		/// <summary>
+		/// Modifies a bcp format file to load a data file with a format similar to JSON.
+		/// </summary>
+		/// <remarks>
+		/// This method expects a format file that has already been modified by <see cref="ModifyOutBcpFormatFile"/>.
+		/// This method will remove the "padding" column from the "ROW" but leave the corresponding field in the "RECORD".
+		/// </remarks>
+		private void ModifyInCodePageBcpFormatFile(string formatFile)
+		{
+			XElement formatElement = XElement.Load(formatFile);
+			XNamespace ns = "http://schemas.microsoft.com/sqlserver/2004/bulkload/format";
+
 			// Remove the first "COLUMN" element from the "ROW".
 			XElement row = formatElement.Element(ns + "ROW");
 			row.Element(ns + "COLUMN").Remove();
@@ -2532,6 +2819,12 @@ namespace Mercent.SqlServer.Management
 					break;
 			}
 			return sb.ToString();
+		}
+
+		private string GetOrderByClauseForTable(Table table)
+		{
+			string checksumColumnList;
+			return GetOrderByClauseForTable(table, out checksumColumnList);
 		}
 
 		private string GetOrderByClauseForTable(Table table, out string checksumColumnList)
