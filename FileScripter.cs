@@ -1098,23 +1098,45 @@ namespace Mercent.SqlServer.Management
 
 					if(table.RowCount > 0)
 					{
-						// If the table has more than 50,000 rows then we will use BCP with a compact text format.
-						// We used to use Unicode native format (see BulkCopyTableDataUnicodeNative method) but
-						// the Unicode native format is a binary file that doesn't diff or merge well.
-						// The compact text format is larger than the binary format but is more compact than the
-						// full JSON-like text format used for tables with fewer rows.
-						if(table.RowCount > 50000)
+						// If the table has any variant columns then we can't use a BCP text format.
+						if(HasAnyVariantColumns(table))
 						{
-							BulkCopyTableDataCompactCodePage(table, "1252");
+							// If the table has more than 50,000 rows then we will use BCP with a Unicode native format.
+							// This is a binary format that can handle the variant data type and a large number of rows.
+							if(table.RowCount > 50000)
+							{
+								BulkCopyTableDataUnicodeNative(table);
+							}
+							else
+							{
+								// Otherwise use BCP with a custom JSON-like text format.
+								// This format is designed to allow the file to be viewed in a text editor,
+								// diff'd and merged.
+								// For tables that have more than a few rows, this method runs faster than INSERT statements
+								// when deploying the database (see the ScriptTableData method, which is no longer used).
+								ScriptTableData(table);
+							}
 						}
 						else
 						{
-							// Otherwise use BCP with a custom JSON-like text format.
-							// This format is designed to allow the file to be viewed in a text editor,
-							// diff'd and merged.
-							// For tables that have more than a few rows, this method runs faster than INSERT statements
-							// when deploying the database (see the ScriptTableData method, which is no longer used).
-							BulkCopyTableDataCodePage(table, "1252");
+							// If the table has more than 50,000 rows then we will use BCP with a compact text format.
+							// We used to use Unicode native format (see BulkCopyTableDataUnicodeNative method) but
+							// the Unicode native format is a binary file that doesn't diff or merge well.
+							// The compact text format is larger than the binary format but is more compact than the
+							// full JSON-like text format used for tables with fewer rows.
+							if(table.RowCount > 50000)
+							{
+								BulkCopyTableDataCompactCodePage(table, "1252");
+							}
+							else
+							{
+								// Otherwise use BCP with a custom JSON-like text format.
+								// This format is designed to allow the file to be viewed in a text editor,
+								// diff'd and merged.
+								// For tables that have more than a few rows, this method runs faster than INSERT statements
+								// when deploying the database (see the ScriptTableData method, which is no longer used).
+								BulkCopyTableDataCodePage(table, "1252");
+							}
 						}
 					}
 				}
@@ -1123,9 +1145,26 @@ namespace Mercent.SqlServer.Management
 			AddScriptFileRange(fkyFileNames);
 		}
 
-		[Obsolete("This method is no longer used since all data is now using bcp (either Unicode native format or custom Unicode character format).")]
-		private void ScriptTableData(Table table, string fileName)
+		private bool HasAnyVariantColumns(Table table)
 		{
+			return table.Columns
+				.Cast<Column>()
+				.Any(c => c.DataType.SqlDataType == SqlDataType.Variant);
+		}
+
+		private void ScriptTableData(Table table)
+		{
+			string relativeDataDir = Path.Combine("Schemas", table.Schema, "Data");
+			string dataDir = Path.Combine(OutputDirectory, relativeDataDir);
+			if(!Directory.Exists(dataDir))
+				Directory.CreateDirectory(dataDir);
+
+			string relativeFileName = Path.Combine(relativeDataDir, table.Name + ".sql");
+			AddScriptFile(relativeFileName);
+
+			string fileName = Path.Combine(OutputDirectory, relativeFileName);
+			Console.WriteLine(fileName);
+
 			int maxBatchSize = 1000;
 			int divisor = 511;
 			int remainder = 510;
