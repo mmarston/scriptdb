@@ -24,6 +24,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -325,6 +326,13 @@ namespace Mercent.SqlServer.Management
 						writer.WriteLine("PRINT '{0}'", file.FileName);
 						writer.WriteLine("GO");
 						writer.WriteLine(file.Command);
+					}
+					// If the database is readonly then set it readonly at the very end.
+					if(database.ReadOnly)
+					{
+						writer.WriteLine("PRINT 'Setting database to read-only mode.'");
+						writer.WriteLine("GO");
+						writer.WriteLine("ALTER DATABASE [{0}] SET READ_ONLY;", FileScripter.DBName);
 					}
 				}
 
@@ -853,10 +861,6 @@ namespace Mercent.SqlServer.Management
 			string fileName = "Database.sql";
 			string outputFileName = Path.Combine(this.OutputDirectory, fileName);
 			ScriptingOptions options = new ScriptingOptions();
-			options.FileName = outputFileName;
-			options.ToFileOnly = true;
-			options.AppendToFile = true;
-			options.Encoding = this.Encoding;
 			options.TargetServerVersion = this.TargetServerVersion;
 			
 			options.AllowSystemObjects = false;
@@ -868,13 +872,25 @@ namespace Mercent.SqlServer.Management
 
 			Console.WriteLine(outputFileName);
 
+			// Set the value of the internal ScriptName property used when scripting the database.
+			// This the same property that the Transfer object sets to create the destination database.
+			// The alternative (which I had previously used) was to go through the script and replace
+			// the old database name with the new database name.
+			typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, database, new string[] { FileScripter.DBName }, null);
+
+
 			// Add our own check to see if the database already exists so we can optionally drop it.
 			// The scripter will add its own check if the database does not exist so it will create it.
-			using(TextWriter writer = new StreamWriter(outputFileName,false, Encoding))
+			// We then SET READ_WRITE in case the database was read-only
+			// (this must be done before we can set to SINGLE_USER).
+			// Then we SET SINGLE_USER.
+			// Both of these are SET WITH ROLLBACK IMMEDIATE to close any existing connections.
+			using(TextWriter writer = new StreamWriter(outputFileName, false, Encoding))
 			{
 				writer.WriteLine("IF EXISTS (SELECT name FROM sys.databases WHERE name = N'{0}')", FileScripter.DBName);
 				writer.WriteLine("BEGIN");
 				writer.WriteLine("\tPRINT 'Note: the database ''{0}'' already exits. All open transactions will be rolled back and existing connections closed.';", FileScripter.DBName);
+				writer.WriteLine("\tALTER DATABASE [{0}] SET READ_WRITE WITH ROLLBACK IMMEDIATE;", FileScripter.DBName);
 				writer.WriteLine("\tALTER DATABASE [{0}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;", FileScripter.DBName);
 				writer.WriteLine("\tIF '$(DROPDB)' IN ('true', '1')", FileScripter.DBName);
 				writer.WriteLine("\tBEGIN");
@@ -883,20 +899,31 @@ namespace Mercent.SqlServer.Management
 				writer.WriteLine("\tEND");
 				writer.WriteLine("END");
 				writer.WriteLine("GO");
-			}
+			
+				// Script out the database options.
+				StringCollection script = scripter.ScriptWithList(new SqlSmoObject[] { database });
 
-			// Set the value of the internal ScriptName property used when scripting the database.
-			// This the same property that the Transfer object sets to create the destination database.
-			// The alternative (which I had previously used) was to go through the script and replace
-			// the old database name with the new database name.
-			typeof(Database).InvokeMember("ScriptName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.SetProperty, null, database, new string[] { FileScripter.DBName }, null);
+				// If the database is read-only then remove the SET READ_ONLY statement from the script.
+				// We need to remove the SET READ_ONLY statement otherwise we couldn't create any of the database objects!
+				if(database.ReadOnly)
+				{
+					Regex readOnlyRegex = new Regex(@"\bSET\s+READ_ONLY\b", RegexOptions.IgnoreCase);
+					// Note that we loop through the statements from the end because we expect
+					// the SET READ_ONLY statement to be the last one.
+					for(int i = script.Count - 1; i >= 0; i--)
+					{
+						if(readOnlyRegex.IsMatch(script[i]))
+						{
+							script.RemoveAt(i);
+							break;
+						}
+					}
+				}
 
-			// Script out the database options.
-			scripter.ScriptWithList(new SqlSmoObject[] { database });
-
-			// Now that the datase exists, add USE statement so that all the following scripts use the database.
-			using(TextWriter writer = new StreamWriter(outputFileName, true, Encoding))
-			{
+				// Add the database options to the file.
+				WriteBatches(writer, script);
+				
+				// Now that the datase exists, add USE statement so that all the following scripts use the database.
 				writer.WriteLine("USE [{0}]", FileScripter.DBName);
 				writer.WriteLine("GO");
 			}
