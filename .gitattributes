@@ -1,0 +1,20 @@
+# Git attributes for different file types.
+
+# Auto detect text files and perform LF normalization.
+# This is a fallback for file extensions that aren't explicitly set to text or binary
+*	text=auto
+
+# Text files
+*.cs	text
+*.csproj	text
+*.sln	text
+
+# The `diff` attribute affects the `git diff` output for these file types.
+*.cs	diff=csharp
+
+# The `merge` attribute affects how conflicts are handled with these file types.
+# These are some attributes that `GitHub for Windows` creates when initializing a new repository.
+# If we find that these attributes aren't appropriate for us, we can remove them.
+
+*.sln	merge=union
+*.csproj	merge=union
