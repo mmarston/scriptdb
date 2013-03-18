@@ -1089,7 +1089,7 @@ namespace Mercent.SqlServer.Management
 
 			foreach (Table table in database.Tables)
 			{
-				if (!table.IsSystemObject)
+				if (!table.IsSystemObject || IsSysDiagramsWithData(table))
 				{
 					objects[0] = table;
 
@@ -1200,6 +1200,13 @@ namespace Mercent.SqlServer.Management
 			return table.Columns
 				.Cast<Column>()
 				.Any(c => c.DataType.SqlDataType == SqlDataType.Variant);
+		}
+
+		private bool IsSysDiagramsWithData(Table table)
+		{
+			return table.Schema == "dbo"
+				&& table.Name == "sysdiagrams"
+				&& table.RowCount > 0;
 		}
 
 		private void ScriptTableData(Table table)
