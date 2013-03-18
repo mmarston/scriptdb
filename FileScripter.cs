@@ -39,6 +39,16 @@ namespace Mercent.SqlServer.Management
 	{
 		private List<ScriptFile> scriptFiles = new List<ScriptFile>();
 		private HashSet<string> fileSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		/// <summary>
+		/// Set of unique extended property statements (EXEC sys.sp_addextendedproperty).
+		/// </summary>
+		/// <remarks>
+		/// Due to the way we script out tables in multiple files, the extended properties on tables and columns
+		/// would be included in all 3 table files (the primary .sql, .kci.sql and .fky.sql).
+		/// To avoid these duplicates, we skip writing out EXEC sys.sp_addextendedproperty statement
+		/// if it already exists in this set.
+		/// </remarks>
+		private HashSet<string> extendedPropertySet = new HashSet<string>();
 		private bool ignoreFileSetModified = false;
 		private SortedSet<string> ignoreFileSet = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
 		private Server server;
@@ -240,6 +250,7 @@ namespace Mercent.SqlServer.Management
 
 			scriptFiles.Clear();
 			ignoreFileSet.Clear();
+			extendedPropertySet.Clear();
 			ignoreFileSetModified = false;
 			allEmptyDirectoriesResponseChar = '\0';
 			allExtraFilesResponseChar = '\0';
@@ -739,6 +750,7 @@ namespace Mercent.SqlServer.Management
 				return;
 
 			ScriptingOptions options = new ScriptingOptions();
+			options.ExtendedProperties = true;
 			options.Permissions = true;
 			options.TargetServerVersion = this.TargetServerVersion;
 			
@@ -861,6 +873,7 @@ namespace Mercent.SqlServer.Management
 			string fileName = "Database.sql";
 			string outputFileName = Path.Combine(this.OutputDirectory, fileName);
 			ScriptingOptions options = new ScriptingOptions();
+			options.ExtendedProperties = true;
 			options.TargetServerVersion = this.TargetServerVersion;
 			
 			options.AllowSystemObjects = false;
@@ -952,6 +965,7 @@ namespace Mercent.SqlServer.Management
 				ScriptingOptions options = new ScriptingOptions();
 				options.Encoding = Encoding;
 				options.AllowSystemObjects = false;
+				options.ExtendedProperties = true;
 				options.TargetServerVersion = this.TargetServerVersion;
 
 				Console.WriteLine(outputFileName);
@@ -999,6 +1013,7 @@ namespace Mercent.SqlServer.Management
 				options.ToFileOnly = true;
 				options.Encoding = Encoding;
 				options.AllowSystemObjects = false;
+				options.ExtendedProperties = true;
 				options.TargetServerVersion = this.TargetServerVersion;
 
 				Console.WriteLine(fileName);
@@ -1017,6 +1032,7 @@ namespace Mercent.SqlServer.Management
 		{
 			ScriptingOptions tableOptions = new ScriptingOptions();
 			tableOptions.Encoding = this.Encoding;
+			tableOptions.ExtendedProperties = true;
 			tableOptions.Permissions = true;
 			tableOptions.TargetServerVersion = this.TargetServerVersion;
 			tableOptions.Statistics = false;
@@ -1039,6 +1055,7 @@ namespace Mercent.SqlServer.Management
 			kciOptions.DriNonClustered = true;
 			kciOptions.DriPrimaryKey = true;
 			kciOptions.DriUniqueKeys = true;
+			kciOptions.ExtendedProperties = true;
 			kciOptions.FullTextIndexes = true;
 			kciOptions.Indexes = true;
 			kciOptions.NonClusteredIndexes = true;
@@ -1053,6 +1070,7 @@ namespace Mercent.SqlServer.Management
 
 			ScriptingOptions fkyOptions = new ScriptingOptions();
 			fkyOptions.Encoding = this.Encoding;
+			fkyOptions.ExtendedProperties = true;
 			fkyOptions.DriForeignKeys = true;
 			fkyOptions.DriIncludeSystemNames = true;
 			fkyOptions.PrimaryObject = false;
@@ -1166,6 +1184,11 @@ namespace Mercent.SqlServer.Management
 							}
 						}
 					}
+
+					// Clear the set of unique extended properties.
+					// This isn't strictly necessary, but it does avoid the memory build up
+					// of collecting the properties from all tables into the set.
+					extendedPropertySet.Clear();
 				}
 			}
 			AddScriptFileRange(kciFileNames);
@@ -1763,7 +1786,7 @@ namespace Mercent.SqlServer.Management
 				ns + "FIELD",
 				new XAttribute("ID", 0),
 				new XAttribute(xsi + "type", "CharTerm"),
-				new XAttribute("TERMINATOR", "«"),
+				new XAttribute("TERMINATOR", "Â«"),
 				new XAttribute("MAX_LENGTH", 2)
 			);
 			record.AddFirst(paddingField);
@@ -1790,12 +1813,12 @@ namespace Mercent.SqlServer.Management
 				var field = fields[index];
 				var column = columns[index + 1];
 				string columnName = (string)column.Attribute("NAME");
-				string terminator = "»,«";
+				string terminator = "Â»,Â«";
 				field.SetAttributeValue("TERMINATOR", terminator);
 			}
 
 			// Set the terminator for the last field.
-			fields.Last().SetAttributeValue("TERMINATOR", @"»;\r\n");
+			fields.Last().SetAttributeValue("TERMINATOR", @"Â»;\r\n");
 
 			// Overwrite the format file.
 			formatElement.Save(formatFile);
@@ -2015,6 +2038,7 @@ namespace Mercent.SqlServer.Management
 
 			ScriptingOptions viewOptions = new ScriptingOptions();
 			viewOptions.Encoding = Encoding;
+			viewOptions.ExtendedProperties = true;
 			viewOptions.FullTextIndexes = true;
 			viewOptions.Indexes = true;
 			viewOptions.Permissions = true;
@@ -2027,6 +2051,7 @@ namespace Mercent.SqlServer.Management
 
 			ScriptingOptions triggerOptions = new ScriptingOptions();
 			triggerOptions.Encoding = Encoding;
+			triggerOptions.ExtendedProperties = true;
 			triggerOptions.PrimaryObject = false;
 			triggerOptions.Triggers = true;
 			triggerOptions.TargetServerVersion = targetServerVersion;
@@ -2103,6 +2128,7 @@ namespace Mercent.SqlServer.Management
 			options.FileName = Path.Combine(OutputDirectory, fileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
+			options.ExtendedProperties = true;
 			options.TargetServerVersion = targetServerVersion;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -2137,6 +2163,7 @@ namespace Mercent.SqlServer.Management
 			Console.WriteLine(options.FileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
+			options.ExtendedProperties = true;
 			options.TargetServerVersion = targetServerVersion;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -2182,6 +2209,7 @@ namespace Mercent.SqlServer.Management
 			Console.WriteLine(options.FileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
+			options.ExtendedProperties = true;
 			options.TargetServerVersion = this.TargetServerVersion;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -2216,6 +2244,7 @@ namespace Mercent.SqlServer.Management
 			Console.WriteLine(options.FileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
+			options.ExtendedProperties = true;
 			options.TargetServerVersion = this.TargetServerVersion;
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -2279,15 +2308,6 @@ namespace Mercent.SqlServer.Management
 			if(schema == null)
 				throw new ArgumentNullException("schema");
 
-			ScriptingOptions dropOptions = new ScriptingOptions();
-			dropOptions.IncludeIfNotExists = true;
-			dropOptions.ScriptDrops = true;
-			dropOptions.TargetServerVersion = this.TargetServerVersion;
-			
-			ScriptingOptions options = new ScriptingOptions();
-			options.Permissions = true;
-			options.TargetServerVersion = this.TargetServerVersion;
-
 			IList<StoredProcedure> sprocs = new List<StoredProcedure>();
 			foreach(StoredProcedure sproc in database.StoredProcedures)
 			{
@@ -2303,11 +2323,22 @@ namespace Mercent.SqlServer.Management
 			if(!Directory.Exists(dir))
 				Directory.CreateDirectory(dir);
 
-			options.PrimaryObject = false;
+			ScriptingOptions dropOptions = new ScriptingOptions();
+			dropOptions.IncludeIfNotExists = true;
+			dropOptions.ScriptDrops = true;
+			dropOptions.TargetServerVersion = this.TargetServerVersion;
+
+			ScriptingOptions options = new ScriptingOptions
+			{
+				ExtendedProperties = true,
+				Permissions = true,
+				PrimaryObject = false,
+				TargetServerVersion = this.TargetServerVersion
+			};
+			
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
-			scripter.Options.PrimaryObject = false;
 			
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 			foreach (StoredProcedure sproc in sprocs)
@@ -2424,6 +2455,7 @@ namespace Mercent.SqlServer.Management
 
 			ScriptingOptions options = new ScriptingOptions();
 			options.Encoding = this.Encoding;
+			options.ExtendedProperties = true;
 			options.Permissions = true;
 			options.TargetServerVersion = this.TargetServerVersion;
 
@@ -2471,6 +2503,7 @@ namespace Mercent.SqlServer.Management
 				options.ToFileOnly = true;
 				options.Encoding = Encoding;
 				options.AllowSystemObjects = false;
+				options.ExtendedProperties = true;
 				options.TargetServerVersion = this.TargetServerVersion;
 				
 				Console.WriteLine(options.FileName);
@@ -2500,6 +2533,7 @@ namespace Mercent.SqlServer.Management
 				options.ToFileOnly = true;
 				options.Encoding = Encoding;
 				options.AllowSystemObjects = false;
+				options.ExtendedProperties = true;
 				options.TargetServerVersion = this.TargetServerVersion;
 
 				Console.WriteLine(options.FileName);
@@ -2527,13 +2561,16 @@ namespace Mercent.SqlServer.Management
 				return;
 
 			string fileName = "Roles.sql";
-			ScriptingOptions options = new ScriptingOptions();
-			options.FileName = Path.Combine(this.OutputDirectory, fileName);
-			options.ToFileOnly = true;
-			options.Encoding = Encoding;
-			options.Permissions = true;
-			options.AllowSystemObjects = false;
-			options.TargetServerVersion = this.TargetServerVersion;
+			ScriptingOptions options = new ScriptingOptions
+			{
+				AllowSystemObjects = false,
+				Encoding = Encoding,
+				ExtendedProperties = true,
+				FileName = Path.Combine(this.OutputDirectory, fileName),
+				Permissions = true,
+				TargetServerVersion = this.TargetServerVersion,
+				ToFileOnly = true
+			};
 			
 			if(!TargetDataTools)
 			{
@@ -2595,14 +2632,16 @@ namespace Mercent.SqlServer.Management
 
 			Directory.CreateDirectory(Path.Combine(OutputDirectory, "Schemas"));
 			string fileName = @"Schemas\Schemas.sql";
-			ScriptingOptions options = new ScriptingOptions();
-			options.FileName = Path.Combine(OutputDirectory, fileName);
-			options.ToFileOnly = true;
-			options.Encoding = Encoding;
-			options.Permissions = true;
-			options.AllowSystemObjects = false;
-			options.ScriptOwner = true;
-			options.TargetServerVersion = this.TargetServerVersion;
+			ScriptingOptions options = new ScriptingOptions
+			{
+				AllowSystemObjects = false,
+				Encoding = Encoding,
+				FileName = Path.Combine(OutputDirectory, fileName),
+				Permissions = true,
+				ScriptOwner = true,
+				TargetServerVersion = this.TargetServerVersion,
+				ToFileOnly = true
+			};
 
 			if(!TargetDataTools)
 			{
@@ -2637,6 +2676,7 @@ namespace Mercent.SqlServer.Management
 				options.ToFileOnly = true;
 				options.Encoding = Encoding;
 				options.AllowSystemObjects = false;
+				options.ExtendedProperties = true;
 				options.Permissions = true;
 				options.TargetServerVersion = this.TargetServerVersion;
 
@@ -2686,6 +2726,7 @@ namespace Mercent.SqlServer.Management
 				.GroupBy(x => x.Schema);
 
 			ScriptingOptions options = new ScriptingOptions();
+			options.ExtendedProperties = true;
 			options.PrimaryObject = false;
 			options.Permissions = true;
 			options.TargetServerVersion = this.TargetServerVersion;
@@ -3109,6 +3150,30 @@ namespace Mercent.SqlServer.Management
 			return literal;
 		}
 
+		private bool IsAddExtendedPropertyStatement(string batch)
+		{
+			return batch.StartsWith("EXEC sys.sp_addextendedproperty");
+		}
+
+		private bool SkipBatch(string batch)
+		{
+			// When targetting SSDT (data tools), skip SET statements.
+			// When a script contains a SET statement, SSDT fails to build the project and returns this error:
+			// "SQL70001: This statement is not recognized in this context."
+			if(TargetDataTools && batch.StartsWith("SET", StringComparison.OrdinalIgnoreCase))
+				return true;
+			else if(IsAddExtendedPropertyStatement(batch))
+			{
+				// If this is an extended property, then add it to the set.
+				// If it is already in the set, then it won't be added again,
+				// and we want to skip it.
+				bool added = this.extendedPropertySet.Add(batch);
+				return !added;
+			}
+			else
+				return false;
+		}
+
 		/// <summary>
 		/// Writes out batches of SQL statements.
 		/// </summary>
@@ -3123,13 +3188,11 @@ namespace Mercent.SqlServer.Management
 			foreach(string batch in script)
 			{
 				string trimmedBatch = batch.Trim();
-				// When targetting SSDT (data tools), skip SET statements.
-				// When a script contains a SET statement, SSDT fails to build the project and returns this error:
-				// "SQL70001: This statement is not recognized in this context."
-				if(TargetDataTools && trimmedBatch.StartsWith("SET", StringComparison.OrdinalIgnoreCase))
-					continue;
-				writer.WriteLine(trimmedBatch);
-				writer.WriteLine("GO");
+				if(!SkipBatch(batch))
+				{
+					writer.WriteLine(trimmedBatch);
+					writer.WriteLine("GO");
+				}
 			}
 		}
 
