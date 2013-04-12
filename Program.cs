@@ -1,4 +1,4 @@
-//   Copyright 2012 Mercent Corporation
+//   Copyright 2013 Mercent Corporation
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using Mercent.SqlServer.Management.Upgrade;
 
 namespace Mercent.SqlServer.Management
 {
@@ -25,13 +26,25 @@ namespace Mercent.SqlServer.Management
 		{
 			if(args.Length < 2)
 			{
-				Console.WriteLine("Usage: {0} ServerName DatabaseName [OutDirectory] [-SSDT]", Path.GetFileName(Assembly.GetExecutingAssembly().Location));
+				ShowUsage();
 				return;
 			}
+			if(String.Equals(args[0], "-Upgrade", StringComparison.OrdinalIgnoreCase))
+			{
+				Upgrade(args);
+			}
+			else
+			{
+				Create(args);
+			}
+		}
+
+		private static void Create(string[] args)
+		{
 			FileScripter scripter = new FileScripter();
 			scripter.ServerName = args[0];
 			scripter.DatabaseName = args[1];
-			for(int i=2; i < args.Length; i++)
+			for(int i = 2; i < args.Length; i++)
 			{
 				string arg = args[i];
 				// The -SSDT argument causes ScriptDB to generate scripts for use with
@@ -49,10 +62,41 @@ namespace Mercent.SqlServer.Management
 				else
 				{
 					Console.WriteLine("Unexpected argument: {0}", arg);
+					ShowUsage();
 					return;
 				}
 			}
 			scripter.Script();
+		}
+
+		private static void ShowUsage()
+		{
+			string program = Path.GetFileName(Assembly.GetExecutingAssembly().Location);
+			Console.WriteLine("Usage: {0} ServerName DatabaseName [OutDirectory] [-SSDT]\r\n\t{0} -Upgrade ServerName SourceDatabase TargetDatabase [OutDirectory]", program);
+		}
+
+		private static void Upgrade(string[] args)
+		{
+			if(args.Length < 4)
+			{
+				ShowUsage();
+				return;
+			}
+
+			UpgradeScripter scripter = new UpgradeScripter();
+			scripter.SourceServerName = scripter.TargetServerName = args[1];
+			scripter.SourceDatabaseName = args[2];
+			scripter.TargetDatabaseName = args[3];
+			if(args.Length > 4)
+				scripter.OutputDirectory = args[4];
+			if(args.Length > 5)
+			{
+				Console.WriteLine("Unexpected argument: {0}", args[5]);
+				ShowUsage();
+				return;
+			}
+
+			scripter.GenerateScripts();
 		}
 	}
 }

@@ -53,6 +53,8 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Tests\FileScripterFixture.cs" />
     <Compile Include="Tests\ScriptTest.cs" />
+    <Compile Include="Upgrade\Data\Tests\DataUpgraderTest.cs" />
+    <Compile Include="Upgrade\Schema\Tests\SchemaUpgradeScripterTest.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="Mercent.SqlServer.Management.csproj">

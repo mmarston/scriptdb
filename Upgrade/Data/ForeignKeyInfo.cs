@@ -11,30 +11,32 @@
 //   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 //   See the License for the specific language governing permissions and
 //   limitations under the License.
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
+using Microsoft.SqlServer.Management.Smo;
 
-namespace Mercent.SqlServer.Management
+namespace Mercent.SqlServer.Management.Upgrade.Data
 {
-	internal class ScriptFile
+	internal class ForeignKeyInfo
 	{
-		public ScriptFile(string fileName)
+		public ForeignKey ForeignKey { get; set; }
+		public TableInfo ForeignTable { get; set; }
+		public TableInfo PrimaryTable { get; set; }
+		
+		public bool ShouldDisable
 		{
-			if(fileName == null)
-				throw new ArgumentNullException("fileName");
-			this.FileName = fileName;
-			this.Command = ":r \"" + fileName + '"';
+			get
+			{
+				// If the dependency order was correctly resolved
+				// (the primary table comes before the foreign table),
+				// then the foreign key does not need to be disabled.
+				if(PrimaryTable.DependencyIndex < ForeignTable.DependencyIndex)
+					return false;
+				else
+					return true;
+			}
 		}
-
-		public ScriptFile(string fileName, string command)
-		{
-			this.FileName = fileName;
-			this.Command = command;
-		}
-
-		public string FileName { get; private set; }
-		public string Command { get; private set; }
 	}
 }

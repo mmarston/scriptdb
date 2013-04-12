@@ -1,4 +1,4 @@
-//   Copyright 2012 Mercent Corporation
+//   Copyright 2013 Mercent Corporation
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -282,7 +282,7 @@ namespace Mercent.SqlServer.Management.Tests
 				}
 
 			}
-			catch(Exception x)
+			catch(Exception)
 			{
 				throw;
 			}

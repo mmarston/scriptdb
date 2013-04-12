@@ -1,4 +1,4 @@
-//   Copyright 2013 Mercent Corporation
+﻿//   Copyright 2013 Mercent Corporation
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -13,24 +13,19 @@
 //   limitations under the License.
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Mercent.SqlServer.Management;
-
-namespace Mercent.SqlServer.Management.Tests
+namespace Mercent.SqlServer.Management.IO
 {
-	[TestClass]
-	public class FileScripterFixture
+	public class FileCompareInfo
 	{
-		[TestMethod]
-		public void ScriptTest()
-		{
-			FileScripter scripter = new FileScripter();
-			scripter.OutputDirectory = "Product_Merchant";
-			scripter.ServerName = @"tank";
-			scripter.DatabaseName = "Product_Merchant";
-			scripter.Script();
-		}
+		public string Name { get; internal set; }
+		public string RelativePath { get; internal set; }
+		public string SourcePath { get; internal set; }
+		public string TargetPath { get; internal set; }
+		public FileCompareStatus Status { get; internal set; }
+		public bool IsDirectory { get; internal set; }
 	}
 }

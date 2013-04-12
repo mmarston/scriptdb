@@ -1,4 +1,4 @@
-//   Copyright 2013 Mercent Corporation
+﻿//   Copyright 2013 Mercent Corporation
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -11,26 +11,19 @@
 //   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 //   See the License for the specific language governing permissions and
 //   limitations under the License.
-using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Mercent.SqlServer.Management;
-
-namespace Mercent.SqlServer.Management.Tests
+namespace Mercent.SqlServer.Management.Upgrade.Data
 {
-	[TestClass]
-	public class FileScripterFixture
+	public class DataUpgradeOptions
 	{
-		[TestMethod]
-		public void ScriptTest()
+		public DataUpgradeOptions()
 		{
-			FileScripter scripter = new FileScripter();
-			scripter.OutputDirectory = "Product_Merchant";
-			scripter.ServerName = @"tank";
-			scripter.DatabaseName = "Product_Merchant";
-			scripter.Script();
+			DisableTriggers = true;
 		}
+
+		public bool DisableTriggers { get; set; }
 	}
 }
