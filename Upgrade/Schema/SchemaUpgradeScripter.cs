@@ -80,6 +80,11 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 			};
 			DacServices targetServices = new DacServices(targetBuilder.ConnectionString);
 
+			// Set the database deployment options.
+			// Note that even though options such as keyword casing, simicolons, and whitespace
+			// don't affect the runtime behavior, we want to compare these so that we can
+			// achieve source-code level equivalence between the source and target
+			// (script files generate from the databases should be identical).
 			DacDeployOptions deployOptions = new DacDeployOptions
 			{
 				AllowDropBlockingAssemblies = true,
@@ -131,6 +136,7 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 				return false;
 			else
 			{
+				SetOptions(writer);
 				writer.Write(deployScript);
 				return true;
 			}
@@ -170,6 +176,24 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 			// Use the SQLCMDDBNAME variable name instead of $(DatabaseName).
 			deployScript = deployScript.Replace("$(DatabaseName)", "$(SQLCMDDBNAME)");
 			return deployScript;
+		}
+
+		/// <summary>
+		/// Apply the appropriate SET options (ANSI_NULLS, ANSI_PADDING, etc).
+		/// </summary>
+		/// <remarks>
+		/// These are the SET options required for updates to tables that affect filtered indexes, indexes on views,
+		/// or indexes computed columns.
+		/// See http://msdn.microsoft.com/en-us/library/ms188783.aspx
+		/// (the "Required SET Options for Filtered Indexes" section)
+		/// and http://msdn.microsoft.com/en-us/library/ms190356.aspx
+		/// (the "When you are creating and manipulating indexes on computed columns or indexed views..." paragraph).
+		/// </remarks>
+		private void SetOptions(TextWriter writer)
+		{
+			writer.WriteLine("SET ANSI_NULLS, ANSI_PADDING, ANSI_WARNINGS, ARITHABORT, CONCAT_NULL_YIELDS_NULL, QUOTED_IDENTIFIER ON;");
+			writer.WriteLine("SET NUMERIC_ROUNDABORT OFF;");
+			writer.WriteLine("GO");
 		}
 
 		private void VerifyProperties()

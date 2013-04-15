@@ -203,9 +203,11 @@ namespace Mercent.SqlServer.Management
 
 		public static int RunSqlCmd(string serverName, string databaseName, FileInfo scriptFile, IDictionary<string, string> variables = null, FileInfo logFile = null)
 		{
-			Process process = StartSqlCmd(serverName, databaseName, scriptFile, variables, logFile);
-			process.WaitForExit();
-			return process.ExitCode;
+			using(Process process = StartSqlCmd(serverName, databaseName, scriptFile, variables, logFile))
+			{
+				process.WaitForExit();
+				return process.ExitCode;
+			}
 		}
 
 		public static Process StartSqlCmd(string serverName, string databaseName, FileInfo scriptFile, IDictionary<string, string> variables = null, FileInfo logFile = null)
@@ -221,7 +223,7 @@ namespace Mercent.SqlServer.Management
 			args.AppendFormat(" -S \"{0}\"", serverName);
 			if(databaseName != null)
 				args.AppendFormat(" -d \"{0}\"", databaseName);
-			args.Append(" -E -b -r");
+			args.Append(" -E -b -r -I");
 			args.AppendFormat(" -i \"{0}\"", scriptFile.FullName);
 			if(variables != null && variables.Count > 0)
 			{

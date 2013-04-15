@@ -98,6 +98,8 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 				if(!changedTables.Any())
 					return false;
 
+				SetOptions();
+
 				CheckForIndexesToDisable();
 
 				// Resolve the order that the changed tables should be scripted in.
@@ -1008,6 +1010,26 @@ WHERE EXISTS
 				updateStatement.Append(";");
 				tableInfo.UpdateStatements.Add(updateStatement.ToString());
 			}
+		}
+
+		/// <summary>
+		/// Apply the appropriate SET options (ANSI_NULLS, ANSI_PADDING, etc).
+		/// </summary>
+		/// <remarks>
+		/// These are the SET options required for updates to tables that affect filtered indexes, indexes on views,
+		/// or indexes computed columns.
+		/// See http://msdn.microsoft.com/en-us/library/ms188783.aspx
+		/// (the "Required SET Options for Filtered Indexes" section)
+		/// and http://msdn.microsoft.com/en-us/library/ms190356.aspx
+		/// (the "When you are creating and manipulating indexes on computed columns or indexed views..." paragraph).
+		/// </remarks>
+		private void SetOptions()
+		{
+			WriteBatch
+			(
+				"SET ANSI_NULLS, ANSI_PADDING, ANSI_WARNINGS, ARITHABORT, CONCAT_NULL_YIELDS_NULL, QUOTED_IDENTIFIER ON;\r\n"
+				+ "SET NUMERIC_ROUNDABORT OFF;"
+			);
 		}
 
 		/// <summary>
