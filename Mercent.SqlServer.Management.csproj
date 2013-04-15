@@ -60,6 +60,7 @@
     <Compile Include="IO\FileCompareInfo.cs" />
     <Compile Include="IO\FileComparer.cs" />
     <Compile Include="IO\FileCompareStatus.cs" />
+    <Compile Include="IO\MessageReceivedEventArgs.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="ScriptExtensions.cs" />

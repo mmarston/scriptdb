@@ -32,6 +32,7 @@ using Microsoft.SqlServer.Management.Smo;
 using Microsoft.SqlServer.Management.Smo.Broker;
 using Microsoft.SqlServer.Management.Common;
 using Microsoft.SqlServer.Management.Sdk.Sfc;
+using Mercent.SqlServer.Management.IO;
 
 namespace Mercent.SqlServer.Management
 {
@@ -96,6 +97,10 @@ namespace Mercent.SqlServer.Management
 			get { return targetServerVersion; }
 			set { targetServerVersion = value; }
 		}
+
+		public event EventHandler<MessageReceivedEventArgs> ErrorMessageReceived;
+		public event EventHandler<MessageReceivedEventArgs> ProgressMessageReceived;
+		public event EventHandler<MessageReceivedEventArgs> OutputMessageReceived;
 
 		private void AddIgnoreFiles()
 		{
@@ -357,7 +362,7 @@ namespace Mercent.SqlServer.Management
 
 		private void PrefetchObjects()
 		{
-			Console.Write("Prefetching objects");
+			OnProgressMessageReceived("Prefetching objects.");
 			ScriptingOptions prefetchOptions = new ScriptingOptions();
 			prefetchOptions.AllowSystemObjects = false;
 			prefetchOptions.ClusteredIndexes = true;
@@ -379,14 +384,14 @@ namespace Mercent.SqlServer.Management
 			prefetchOptions.TargetServerVersion = this.TargetServerVersion;
 
 			database.PrefetchObjects(typeof(UserDefinedType), prefetchOptions);
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 
 			PrefetchRoles();
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			PrefetchFullTextCatalogs();
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			PrefetchStoredProcedures(prefetchOptions);
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			// Set the column fields to initialize.
 			// Used to prefetch view and udf columns.
 			// We manually prefetch the columns because the Database.PrefetchObjects()
@@ -406,31 +411,32 @@ namespace Mercent.SqlServer.Management
 				"XmlSchemaNamespaceSchema");
 
 			PrefetchViews(prefetchOptions);
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			PrefetchUserDefinedFunctions(prefetchOptions);
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			// Prefetching PartitionFunctions didn't help with SMO 2008.
 			// Actually it wouldn't script out whether the range was LEFT or RIGHT (PartitionFunction.RangeType).
 			database.PrefetchObjects(typeof(PartitionScheme), prefetchOptions);
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			database.PrefetchObjects(typeof(UserDefinedAggregate), prefetchOptions);
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			PrefetchTables(prefetchOptions);
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			PrefetchSynonyms();
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			PrefetchServiceBrokerMessageTypes();
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			PrefetchServiceBrokerContracts();
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			PrefetchServiceBrokerQueues();
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			PrefetchServiceBrokerServices();
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			PrefetchAssemblies(prefetchOptions);
-			Console.Write('.');
+			OnProgressMessageReceived(null);
 			database.PrefetchObjects(typeof(XmlSchemaCollection), prefetchOptions);
-			Console.WriteLine('.');
+			OnProgressMessageReceived(null);
+			OnProgressMessageReceived(String.Empty);
 		}
 
 		private void PrefetchAssemblies(ScriptingOptions prefetchOptions)
@@ -717,7 +723,6 @@ namespace Mercent.SqlServer.Management
 						ignoreFileSet.Add(relativeSubDir);
 					}
 				}
-
 			}
 		}
 
@@ -767,11 +772,11 @@ namespace Mercent.SqlServer.Management
 					if(assembly.IsSystemObject)
 						continue;
 
-					string filename = Path.Combine(relativeDir, assembly.Name + ".sql");
-					string outputPath = Path.Combine(OutputDirectory, filename);
+					string fileName = Path.Combine(relativeDir, assembly.Name + ".sql");
+					string outputPath = Path.Combine(OutputDirectory, fileName);
 					objects[0] = assembly;
 
-					Console.WriteLine(outputPath);
+					OnProgressMessageReceived(fileName);
 					StringCollection script = script = scripter.ScriptWithList(objects);
 
 					// SSDT projects should reference assemblies by using an assembly or project reference,
@@ -872,7 +877,7 @@ namespace Mercent.SqlServer.Management
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 
-			Console.WriteLine(outputFileName);
+			OnProgressMessageReceived(fileName);
 
 			// Set the value of the internal ScriptName property used when scripting the database.
 			// This the same property that the Transfer object sets to create the destination database.
@@ -957,7 +962,7 @@ namespace Mercent.SqlServer.Management
 				options.ExtendedProperties = true;
 				options.TargetServerVersion = this.TargetServerVersion;
 
-				Console.WriteLine(outputFileName);
+				OnProgressMessageReceived(fileName);
 
 				// Script out the file groups (but not the files because we don't want the file paths in source control).
 				using(TextWriter writer = new StreamWriter(outputFileName, false, Encoding))
@@ -1005,7 +1010,7 @@ namespace Mercent.SqlServer.Management
 				options.ExtendedProperties = true;
 				options.TargetServerVersion = this.TargetServerVersion;
 
-				Console.WriteLine(fileName);
+				OnProgressMessageReceived(fileName);
 
 				Scripter scripter = new Scripter(server);
 				scripter.Options = options;
@@ -1105,7 +1110,7 @@ namespace Mercent.SqlServer.Management
 					string fileName = Path.Combine(relativeDir, table.Name + ".sql");
 					AddScriptFile(fileName);
 					string outputFileName = Path.Combine(OutputDirectory, fileName);
-					Console.WriteLine(outputFileName);
+					OnProgressMessageReceived(fileName);
 					WriteBatches(outputFileName, tableScripter.ScriptWithList(objects));
 
 					// When targeting SSDT, use a single file for each table.
@@ -1120,13 +1125,13 @@ namespace Mercent.SqlServer.Management
 						string kciFileName = Path.ChangeExtension(fileName, ".kci.sql");
 						kciFileNames.Add(kciFileName);
 						outputFileName = Path.Combine(OutputDirectory, kciFileName);
-						Console.WriteLine(outputFileName);
+						OnProgressMessageReceived(kciFileName);
 						WriteBatches(outputFileName, kciScripter.ScriptWithList(objects));
 
 						string fkyFileName = Path.ChangeExtension(fileName, ".fky.sql");
 						fkyFileNames.Add(fkyFileName);
 						outputFileName = Path.Combine(OutputDirectory, fkyFileName);
-						Console.WriteLine(outputFileName);
+						OnProgressMessageReceived(fkyFileName);
 						WriteBatches(outputFileName, fkyScripter.ScriptWithList(objects));
 					}
 
@@ -1195,7 +1200,7 @@ namespace Mercent.SqlServer.Management
 			AddScriptFile(relativeFileName);
 
 			string fileName = Path.Combine(OutputDirectory, relativeFileName);
-			Console.WriteLine(fileName);
+			OnProgressMessageReceived(relativeFileName);
 
 			int maxBatchSize = 1000;
 			int divisor = 511;
@@ -1349,7 +1354,7 @@ namespace Mercent.SqlServer.Management
 			AddUnicodeNativeDataFile(relativeDataFile, table.Schema, table.Name);
 
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
-			Console.WriteLine(dataFile);
+			OnProgressMessageReceived(relativeDataFile);
 
 			// Run bcp to create the data file.
 			// bcp "SELECT * FROM [database].[schema].[table] ORDER BY ..." queryout "dataFile" -S servername -T -N
@@ -1386,7 +1391,7 @@ namespace Mercent.SqlServer.Management
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
 			string tmpDataFile = dataFile + ".tmp";
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
-			Console.WriteLine(dataFile);
+			OnProgressMessageReceived(relativeDataFile);
 
 			// Run bcp to create the format file.
 			// bcp [database].[schema].[table] format nul -S servername -T -w -f formatFile -x
@@ -1450,7 +1455,7 @@ namespace Mercent.SqlServer.Management
 
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
-			Console.WriteLine(dataFile);
+			OnProgressMessageReceived(relativeDataFile);
 			
 			// Run bcp to create the format file.
 			// bcp [database].[schema].[table] format nul -S servername -T -c -C codePage -f formatFile -x
@@ -1511,7 +1516,7 @@ namespace Mercent.SqlServer.Management
 
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
-			Console.WriteLine(dataFile);
+			OnProgressMessageReceived(relativeDataFile);
 
 			// Run bcp to create the format file.
 			// bcp [database].[schema].[table] format nul -S servername -T -c -C codePage -f formatFile -x
@@ -1844,14 +1849,25 @@ namespace Mercent.SqlServer.Management
 			bcpProcess.WaitForExit();
 		}
 
+		private bool SkipBcpErrorMessage(string message)
+		{
+			// We don't need to see the empty string warning.
+			return message == "SQLState = S1000, NativeError = 0" ||
+			(
+				message != null && message.Contains("Warning: BCP import with a format file will convert empty strings in delimited columns to NULL.")
+			);
+		}
+
 		void bcpProcess_ErrorDataReceived(object sender, DataReceivedEventArgs e)
 		{
-			Console.Error.WriteLine(e.Data);
+			if(!SkipBcpErrorMessage(e.Data))
+				OnErrorMessageReceived(e.Data);
 		}
 
 		void bcpProcess_OutputDataReceived(object sender, DataReceivedEventArgs e)
 		{
-			Console.Out.WriteLine(e.Data);
+			if(!SkipBcpErrorMessage(e.Data))
+				OnOutputMessageReceived(e.Data);
 		}
 
 		private SqlDataReader ExecuteReader(string commandText)
@@ -1915,16 +1931,16 @@ namespace Mercent.SqlServer.Management
 					// Check that the dependency is another schema bound function or view
 					if(schemaBoundUrns.Contains(node.Urn))
 					{
-						string filename;
+						string fileName;
 						switch(node.Urn.Type)
 						{
 							case "View":
-								filename = String.Format(@"Schemas\{0}\Views\{1}.sql", node.Urn.GetAttribute("Schema"), node.Urn.GetAttribute("Name"));
-								AddScriptFile(filename);
+								fileName = String.Format(@"Schemas\{0}\Views\{1}.sql", node.Urn.GetAttribute("Schema"), node.Urn.GetAttribute("Name"));
+								AddScriptFile(fileName);
 								break;
 							case "UserDefinedFunction":
-								filename = String.Format(@"Schemas\{0}\Functions\{1}.sql", node.Urn.GetAttribute("Schema"), node.Urn.GetAttribute("Name"));
-								AddScriptFile(filename);
+								fileName = String.Format(@"Schemas\{0}\Functions\{1}.sql", node.Urn.GetAttribute("Schema"), node.Urn.GetAttribute("Name"));
+								AddScriptFile(fileName);
 								break;
 						}
 					}
@@ -1965,7 +1981,7 @@ namespace Mercent.SqlServer.Management
 
 			string fileName = Path.Combine(relativeDir, "Views.sql");
 			string outputFileName = Path.Combine(OutputDirectory, fileName);
-			Console.WriteLine(outputFileName);
+			OnProgressMessageReceived(fileName);
 			using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 			{
 				foreach(View view in views)
@@ -2047,7 +2063,7 @@ namespace Mercent.SqlServer.Management
 			{
 				string fileName = Path.Combine(relativeDir, view.Name + ".sql");
 				string outputFileName = Path.Combine(OutputDirectory, fileName);
-				Console.WriteLine(outputFileName);
+				OnProgressMessageReceived(fileName);
 				
 				objects[0] = view;
 				StringCollection script = viewScripter.ScriptWithList(objects);
@@ -2105,7 +2121,7 @@ namespace Mercent.SqlServer.Management
 				Directory.CreateDirectory(dir);
 
 			string fileName = Path.Combine(relativeDir, "Message Types.sql");
-			Console.WriteLine(fileName);
+			OnProgressMessageReceived(fileName);
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = Path.Combine(OutputDirectory, fileName);
 			options.ToFileOnly = true;
@@ -2142,7 +2158,7 @@ namespace Mercent.SqlServer.Management
 			string fileName = Path.Combine(relativeDir, "Contracts.sql");
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = Path.Combine(OutputDirectory, fileName);
-			Console.WriteLine(options.FileName);
+			OnProgressMessageReceived(fileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
 			options.ExtendedProperties = true;
@@ -2188,7 +2204,7 @@ namespace Mercent.SqlServer.Management
 			string fileName = Path.Combine(relativeDir, "Queues.sql");
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = Path.Combine(OutputDirectory, fileName);
-			Console.WriteLine(options.FileName);
+			OnProgressMessageReceived(fileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
 			options.ExtendedProperties = true;
@@ -2223,7 +2239,7 @@ namespace Mercent.SqlServer.Management
 			string fileName = Path.Combine(relativeDir, "Services.sql");
 			ScriptingOptions options = new ScriptingOptions();
 			options.FileName = Path.Combine(OutputDirectory, fileName);
-			Console.WriteLine(options.FileName);
+			OnProgressMessageReceived(fileName);
 			options.ToFileOnly = true;
 			options.Encoding = this.Encoding;
 			options.ExtendedProperties = true;
@@ -2265,7 +2281,7 @@ namespace Mercent.SqlServer.Management
 
 			string fileName = Path.Combine(relativeDir, "Stored Procedures.sql");
 			string outputFileName = Path.Combine(OutputDirectory, fileName);
-			Console.WriteLine(outputFileName);
+			OnProgressMessageReceived(fileName);
 			using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 			{
 				foreach(StoredProcedure sproc in sprocs)
@@ -2327,7 +2343,7 @@ namespace Mercent.SqlServer.Management
 			{
 				string fileName = Path.Combine(relativeDir, sproc.Name + ".sql");
 				string outputFileName = Path.Combine(OutputDirectory, fileName);
-				Console.WriteLine(outputFileName);
+				OnProgressMessageReceived(fileName);
 				using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 				{
 					objects[0] = sproc;
@@ -2375,7 +2391,7 @@ namespace Mercent.SqlServer.Management
 
 			string fileName = Path.Combine(relativeDir, "Functions.sql");
 			string outputFileName = Path.Combine(OutputDirectory, fileName);
-			Console.WriteLine(outputFileName);
+			OnProgressMessageReceived(fileName);
 			using(TextWriter writer = new StreamWriter(outputFileName, false, this.Encoding))
 			{
 				foreach(UserDefinedFunction udf in udfs)
@@ -2450,7 +2466,7 @@ namespace Mercent.SqlServer.Management
 			{
 				string fileName = Path.Combine(relativeDir, udf.Name + ".sql");
 				string outputFileName = Path.Combine(OutputDirectory, fileName);
-				Console.WriteLine(outputFileName);
+				OnProgressMessageReceived(fileName);
 				objects[0] = udf;
 				StringCollection script = scripter.ScriptWithList(objects);
 				if(!TargetDataTools)
@@ -2487,8 +2503,8 @@ namespace Mercent.SqlServer.Management
 				options.AllowSystemObjects = false;
 				options.ExtendedProperties = true;
 				options.TargetServerVersion = this.TargetServerVersion;
-				
-				Console.WriteLine(options.FileName);
+
+				OnProgressMessageReceived(fileName);
 
 				Scripter scripter = new Scripter(server);
 				scripter.Options = options;
@@ -2518,7 +2534,7 @@ namespace Mercent.SqlServer.Management
 				options.ExtendedProperties = true;
 				options.TargetServerVersion = this.TargetServerVersion;
 
-				Console.WriteLine(options.FileName);
+				OnProgressMessageReceived(fileName);
 
 				Transfer transfer = new Transfer(database);
 				transfer.Options = options;
@@ -2559,7 +2575,7 @@ namespace Mercent.SqlServer.Management
 				options.IncludeIfNotExists = true;
 			}
 
-			Console.WriteLine(options.FileName);
+			OnProgressMessageReceived(fileName);
 
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -2630,7 +2646,7 @@ namespace Mercent.SqlServer.Management
 				options.IncludeIfNotExists = true;
 			}
 
-			Console.WriteLine(options.FileName);
+			OnProgressMessageReceived(fileName);
 
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
@@ -2651,7 +2667,7 @@ namespace Mercent.SqlServer.Management
 					Directory.CreateDirectory(dir);
 
 				string relativeFilePath = Path.Combine(relativeDir, fileName);
-				Console.WriteLine(relativeFilePath);
+				OnProgressMessageReceived(relativeFilePath);
 
 				ScriptingOptions options = new ScriptingOptions();
 				options.FileName = Path.Combine(OutputDirectory, relativeFilePath);
@@ -2740,7 +2756,7 @@ namespace Mercent.SqlServer.Management
 				{
 					string fileName = Path.Combine(relativeDir, xmlSchemaCollection.Name + ".sql");
 					string outputFileName = Path.Combine(OutputDirectory, fileName);
-					Console.WriteLine(fileName);
+					OnProgressMessageReceived(fileName);
 
 					using(TextReader textReader = new StringReader(xmlSchemaCollection.Text))
 					{
@@ -2934,6 +2950,36 @@ namespace Mercent.SqlServer.Management
 		private bool IsAddExtendedPropertyStatement(string batch)
 		{
 			return batch.StartsWith("EXEC sys.sp_addextendedproperty");
+		}
+
+		private void OnErrorMessageReceived(string message)
+		{
+			if(ErrorMessageReceived == null)
+				Console.Error.WriteLine(message);
+			else
+				ErrorMessageReceived(this, new MessageReceivedEventArgs(message));
+		}
+
+		private void OnOutputMessageReceived(string message)
+		{
+			if(OutputMessageReceived == null)
+				Console.WriteLine(message);
+			else
+				OutputMessageReceived(this, new MessageReceivedEventArgs(message));
+		}
+
+		private void OnProgressMessageReceived(string message)
+		{
+			if(ProgressMessageReceived == null)
+			{
+				// For the console indicate progress with a period when the message is null.
+				if(message == null)
+					Console.Write('.');
+				else
+					Console.WriteLine(message);
+			}
+			else
+				ProgressMessageReceived(this, new MessageReceivedEventArgs(message));
 		}
 
 		private bool SkipBatch(string batch)
