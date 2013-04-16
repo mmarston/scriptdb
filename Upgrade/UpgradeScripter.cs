@@ -13,6 +13,7 @@
 //   limitations under the License.
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -25,6 +26,8 @@ namespace Mercent.SqlServer.Management.Upgrade
 {
 	public class UpgradeScripter
 	{
+		private const string elapsedTimeFormat = @"hh\:mm\:ss";
+
 		public UpgradeScripter()
 		{
 			// Default to empty string, which uses current directory.
@@ -76,6 +79,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			if(!String.IsNullOrWhiteSpace(OutputDirectory) && !Directory.Exists(OutputDirectory))
 				Directory.CreateDirectory(OutputDirectory);
 
+			Stopwatch stopwatch = new Stopwatch();
 			bool hasUpgradeScript = false;
 			bool upgradeSucceeded;
 			FileInfo sourcePackageFile = new FileInfo(Path.Combine(OutputDirectory, "Source.dacpac"));
@@ -103,15 +107,20 @@ namespace Mercent.SqlServer.Management.Upgrade
 				bool hasSchemaChanges;
 				using(TextWriter writer = schemaUpgradeFile.CreateText())
 				{
+					stopwatch.Restart();
 					Console.WriteLine("Extracting the source package.");
 					schemaUpgradeScripter.SourcePackage = schemaUpgradeScripter.ExtractSource(sourcePackageFile);
+					stopwatch.Stop();
+					Console.WriteLine("Finished extracting the source package ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 
+					stopwatch.Restart();
 					Console.WriteLine("Comparing schema and generating {0} script.", schemaUpgradeFile.Name);
 					// If there is a data prep script or an after upgrade script then don't drop
 					// objects yet. The data prep or after upgrade scripts may need move data
 					// from tables that will be dropped.
 					bool dropObjectsNotInSource = dataPrepFile.Exists || afterUpgradeFile.Exists;
 					hasSchemaChanges = schemaUpgradeScripter.GenerateScript(writer, dropObjectsNotInSource);
+					stopwatch.Stop();
 				}
 
 				// If there are schema changes then add the schema upgrade script
@@ -120,11 +129,17 @@ namespace Mercent.SqlServer.Management.Upgrade
 				if(hasSchemaChanges)
 				{
 					hasUpgradeScript = true;
+					Console.WriteLine
+					(
+						@"Finished comparing schema and generating {0} script. ({1} elapsed).",
+						schemaUpgradeFile.Name,
+						stopwatch.Elapsed.ToString(elapsedTimeFormat)
+					);
 					AddAndExecute(upgradeWriter, schemaUpgradeFile);
 				}
 				else
 				{
-					Console.WriteLine("No schema changes detected.");
+					Console.WriteLine("No schema changes detected ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 					schemaUpgradeFile.Delete();
 				}
 
@@ -140,8 +155,10 @@ namespace Mercent.SqlServer.Management.Upgrade
 				bool hasDataChanges;
 				using(TextWriter writer = dataUpgradeFile.CreateText())
 				{
+					stopwatch.Restart();
 					Console.WriteLine("Comparing data and generating {0} script.", dataUpgradeFile.Name);
 					hasDataChanges = dataUpgradeScripter.GenerateScript(writer);
+					stopwatch.Stop();
 				}
 
 				// If there are data changes then add the data upgrade script
@@ -150,11 +167,17 @@ namespace Mercent.SqlServer.Management.Upgrade
 				if(hasDataChanges)
 				{
 					hasUpgradeScript = true;
+					Console.WriteLine
+					(
+						"Finished comparing data and generating {0} script ({1} elapsed).",
+						dataUpgradeFile.Name,
+						stopwatch.Elapsed.ToString(elapsedTimeFormat)
+					);
 					AddAndExecute(upgradeWriter, dataUpgradeFile);
 				}
 				else
 				{
-					Console.WriteLine("No data changes detected.");
+					Console.WriteLine("No data changes detected ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 					dataUpgradeFile.Delete();
 				}
 
@@ -170,8 +193,10 @@ namespace Mercent.SqlServer.Management.Upgrade
 				bool hasFinalSchemaChanges = false;
 				using(TextWriter writer = schemaFinalFile.CreateText())
 				{
+					stopwatch.Restart();
 					Console.WriteLine("Checking for final schema changes and generating {0} script.", schemaFinalFile.Name);
 					hasFinalSchemaChanges = schemaUpgradeScripter.GenerateScript(writer);
+					stopwatch.Stop();
 				}
 
 				// If there are final schema changes then add the schema final script
@@ -180,23 +205,35 @@ namespace Mercent.SqlServer.Management.Upgrade
 				if(hasFinalSchemaChanges)
 				{
 					hasUpgradeScript = true;
+					Console.WriteLine
+					(
+						@"Finished checking for final schema changes and generating {0} script ({1} elapsed).",
+						schemaFinalFile.Name,
+						stopwatch.Elapsed.ToString(elapsedTimeFormat)
+					);
 					AddAndExecute(upgradeWriter, schemaFinalFile);
 				}
 				else
 				{
-					Console.WriteLine("No final schema changes detected.");
+					Console.WriteLine("No final schema changes detected ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 					schemaFinalFile.Delete();
 				}
 
 				// Generate a clean set of scripts for the source database (the "expected" result).
+				stopwatch.Restart();
 				Console.WriteLine("Generating clean scripts from source database (for verification).");
 				DirectoryInfo expectedDirectory = new DirectoryInfo(Path.Combine(OutputDirectory, @"Compare\Expected"));
 				GenerateCreateScripts(SourceServerName, SourceDatabaseName, expectedDirectory);
+				stopwatch.Stop();
+				Console.WriteLine("Finished generating scripts from source database ({0}).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 
 				// Generate a set of scripts for the upgraded target database (the "actual" result).
+				stopwatch.Restart();
 				Console.WriteLine("Generating scripts from upgraded target database (for verification).");
 				DirectoryInfo actualDirectory = new DirectoryInfo(Path.Combine(OutputDirectory, @"Compare\Actual"));
 				GenerateCreateScripts(TargetServerName, TargetDatabaseName, actualDirectory);
+				stopwatch.Stop();
+				Console.WriteLine("Finished generating scripts from upgraded target database ({0}).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 
 				// Verify if the upgrade scripts succeed by checking if the database
 				// script files in the directories are identical.
@@ -222,6 +259,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 
 		private static void OutputSummaryMessage(bool hasUpgradeScript, bool upgradeSucceeded)
 		{
+			Console.WriteLine();
 			if(upgradeSucceeded)
 			{
 				if(hasUpgradeScript)
@@ -231,7 +269,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			}
 			else
 			{
-				Console.WriteLine("Upgrade scripts failed verification. Review the files that failed verification and add manual steps to on of the SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql scripts.");
+				Console.WriteLine("Upgrade scripts failed verification. Review the files that failed verification and add manual steps to a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
 			}
 		}
 
@@ -253,9 +291,12 @@ namespace Mercent.SqlServer.Management.Upgrade
 			int exitCode = ScriptUtility.RunSqlCmd(TargetServerName, TargetDatabaseName, scriptFile, logFile: logFile);
 			if(exitCode != 0)
 			{
-				Console.WriteLine("{0} script failed. Check the log file for error messages:", scriptFile.Name);
-				Console.WriteLine(logFile.FullName);
-				Console.WriteLine();
+				Console.WriteLine
+				(
+					"\r\n{0} script failed. Check the log file for error messages:\r\n{1}\r\n",
+					scriptFile.Name,
+					logFile.FullName
+				);
 				// TODO: abort when non-zero exit code.
 			}
 		}
@@ -299,7 +340,45 @@ namespace Mercent.SqlServer.Management.Upgrade
 			// Delete the directory if it already exists.
 			if(Directory.Exists(fileScripter.OutputDirectory))
 				Directory.Delete(fileScripter.OutputDirectory, true);
-			fileScripter.Script();
+			
+			string logFileName = outputDirectory.Name + ".txt";
+			FileInfo logFile = new FileInfo(Path.Combine(this.OutputDirectory, "Log", logFileName));
+			// Ensure the Log directory exists.
+			logFile.Directory.Create();
+			using(TextWriter logWriter = logFile.CreateText())
+			{
+				string lastProgressMessage = null;
+				fileScripter.ErrorMessageReceived += (s, e) =>
+				{
+					if(e.Message != null)
+					{
+						logWriter.WriteLine(e.Message);
+						// First output the last progress message.
+						// This will hopefully give us context for the error message.
+						if(lastProgressMessage != null)
+						{
+							Console.WriteLine(lastProgressMessage);
+							lastProgressMessage = null;
+						}
+						Console.Error.WriteLine(e.Message);
+					}
+				};
+				fileScripter.OutputMessageReceived += (s, e) =>
+				{
+					logWriter.WriteLine(e.Message);
+				};
+				fileScripter.ProgressMessageReceived += (s, e) =>
+				{
+					if(e.Message != null)
+					{
+						// Capture the last progress message so we can show it above
+						// any error messages.
+						lastProgressMessage = e.Message;
+						logWriter.WriteLine(e.Message);
+					}
+				};
+				fileScripter.Script();
+			}
 		}
 
 		private void ShowFiles(IEnumerable<FileCompareInfo> files, string message)

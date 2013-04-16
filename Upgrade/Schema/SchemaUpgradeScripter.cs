@@ -51,7 +51,11 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 				IntegratedSecurity = true
 			};
 			DacServices sourceServices = new DacServices(sourceBuilder.ConnectionString);
-
+			sourceServices.ProgressChanged += (s, e) =>
+			{
+				if(e.Status == DacOperationStatus.Running)
+					Console.WriteLine(e.Message);
+			};
 			DacExtractOptions extractOptions = new DacExtractOptions
 			{
 				IgnorePermissions = false,
