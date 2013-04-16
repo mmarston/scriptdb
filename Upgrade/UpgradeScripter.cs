@@ -196,7 +196,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 				// Generate a set of scripts for the upgraded target database (the "actual" result).
 				Console.WriteLine("Generating scripts from upgraded target database (for verification).");
 				DirectoryInfo actualDirectory = new DirectoryInfo(Path.Combine(OutputDirectory, @"Compare\Actual"));
-				GenerateCreateScripts(SourceServerName, SourceDatabaseName, actualDirectory);
+				GenerateCreateScripts(TargetServerName, TargetDatabaseName, actualDirectory);
 
 				// Verify if the upgrade scripts succeed by checking if the database
 				// script files in the directories are identical.
@@ -290,16 +290,16 @@ namespace Mercent.SqlServer.Management.Upgrade
 		/// </remarks>
 		private void GenerateCreateScripts(string serverName, string databaseName, DirectoryInfo outputDirectory)
 		{
-			FileScripter sourceScripter = new FileScripter
+			FileScripter fileScripter = new FileScripter
 			{
-				ServerName = SourceServerName,
-				DatabaseName = SourceDatabaseName,
+				ServerName = serverName,
+				DatabaseName = databaseName,
 				OutputDirectory = outputDirectory.FullName
 			};
 			// Delete the directory if it already exists.
-			if(Directory.Exists(sourceScripter.OutputDirectory))
-				Directory.Delete(sourceScripter.OutputDirectory, true);
-			sourceScripter.Script();
+			if(Directory.Exists(fileScripter.OutputDirectory))
+				Directory.Delete(fileScripter.OutputDirectory, true);
+			fileScripter.Script();
 		}
 
 		private void ShowFiles(IEnumerable<FileCompareInfo> files, string message)
