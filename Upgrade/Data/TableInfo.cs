@@ -49,6 +49,17 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 		}
 
 		public bool HasIdentityColumn { get; set; }
+
+		/// <summary>
+		/// The values for INSERT statements.
+		/// </summary>
+		/// <remarks>
+		/// As an optimization, instead of using individual insert statements for every row,
+		/// we insert rows in batches using multiple rows in the VALUES clause.
+		/// Each string in the InsertStatements collection only includes the values
+		/// for one row, surrounded by parenthesis. It does not include the full INSERT statement
+		/// or event the VALUES keyword.
+		/// </remarks>
 		public Collection<string> InsertStatements { get; private set; }
 
 		/// <summary>

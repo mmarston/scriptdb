@@ -772,7 +772,52 @@ WHERE EXISTS
 					WriteBatch("PRINT 'Inserting {0} row(s) into {1}.';", statements.Count, EscapeStringLiteral(tableInfo.QualifiedName));
 					if(tableInfo.HasIdentityColumn)
 						WriteBatch("SET IDENTITY_INSERT {0} ON;", tableInfo.QualifiedName);
-					WriteStatements(statements);
+
+					// Build the base INSERT statement (without the values from any rows).
+					StringBuilder insertStatement = new StringBuilder();
+					insertStatement.AppendFormat("INSERT INTO {0} (", tableInfo.QualifiedName);
+					string delimiter = null;
+					foreach(var columnInfo in tableInfo.Columns)
+					{
+						if(delimiter == null)
+							delimiter = ", ";
+						else
+							insertStatement.Append(delimiter);
+						insertStatement.Append(columnInfo.QuotedName);
+					
+					}
+					insertStatement.AppendLine(")");
+					insertStatement.Append("VALUES ");
+					
+					// Get the length of the base INSERT statement (used to reset the statement length later).
+					int baseStatementLength = insertStatement.Length;
+					
+					delimiter = null;
+					int batchSize = 100;
+					int rowCount = 0;
+					foreach(string values in tableInfo.InsertStatements)
+					{
+						if(delimiter == null)
+							delimiter = ",\r\n\t";
+						else
+							insertStatement.Append(delimiter);
+						insertStatement.Append(values);
+
+						rowCount++;
+						if(rowCount % batchSize == 0)
+						{
+							// Every so many rows (batch size), write the batch and reset the insert statement.
+							WriteBatch(insertStatement.ToString());
+							insertStatement.Length = baseStatementLength;
+							delimiter = null;
+						}
+					}
+					if(rowCount % batchSize != 0)
+					{
+						// Write the the last batch (unless the last row was the end of a batch).
+						WriteBatch(insertStatement.ToString());
+					}
+
 					if(tableInfo.HasIdentityColumn)
 						WriteBatch("SET IDENTITY_INSERT {0} OFF;", tableInfo.QualifiedName);
 				}
@@ -952,29 +997,20 @@ WHERE EXISTS
 
 		private void ScriptInsert(TableInfo tableInfo, object[] values)
 		{
-			StringBuilder insertStatement = new StringBuilder();
-			StringBuilder valuesClause = new StringBuilder();
-			insertStatement.AppendFormat("INSERT INTO {0} (", tableInfo.QualifiedName);
-			valuesClause.Append("VALUES(");
+			StringBuilder valuesBuilder = new StringBuilder();
+			valuesBuilder.Append("(");
 			string delimiter = null;
 			foreach(var columnInfo in tableInfo.Columns)
 			{
 				if(delimiter == null)
 					delimiter = ", ";
 				else
-				{
-					insertStatement.Append(delimiter);
-					valuesClause.Append(delimiter);
-				}
-				insertStatement.Append(columnInfo.QuotedName);
+					valuesBuilder.Append(delimiter);
 				string sourceLiteral = GetSqlLiteral(values, columnInfo.SourceOrdinal, columnInfo.SqlDataType);
-				valuesClause.Append(sourceLiteral);
+				valuesBuilder.Append(sourceLiteral);
 			}
-			insertStatement.AppendLine(")");
-			valuesClause.Append(")");
-			insertStatement.Append(valuesClause);
-			insertStatement.Append(";");
-			tableInfo.InsertStatements.Add(insertStatement.ToString());
+			valuesBuilder.Append(")");
+			tableInfo.InsertStatements.Add(valuesBuilder.ToString());
 		}
 
 		private void ScriptUpdateIfModified(TableInfo tableInfo, object[] values)
