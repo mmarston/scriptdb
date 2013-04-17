@@ -278,7 +278,9 @@ namespace Mercent.SqlServer.Management
 								Console.WriteLine(lastOutputLine);
 								lastOutputLine = null;
 							}
+							Console.ForegroundColor = ConsoleColor.Red;
 							Console.Error.WriteLine(e.Data);
+							Console.ResetColor();
 						}
 					};
 					// Standard out just goes to the log.

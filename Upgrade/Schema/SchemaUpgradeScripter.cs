@@ -28,6 +28,7 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 		public DacPackage SourcePackage { get; set; }
 		public string SourceServerName { get; set; }
 		public string TargetDatabaseName { get; set; }
+		public DacPackage TargetPackage { get; set; }
 		public string TargetServerName { get; set; }
 
 		/// <summary>
@@ -44,29 +45,69 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 			if(String.IsNullOrWhiteSpace(this.SourceDatabaseName))
 				throw new InvalidOperationException("Set the SourceDatabaseName property before calling the ExtractSource() method.");
 
-			SqlConnectionStringBuilder sourceBuilder = new SqlConnectionStringBuilder
-			{
-				DataSource = SourceServerName,
-				InitialCatalog = SourceDatabaseName,
-				IntegratedSecurity = true
-			};
-			DacServices sourceServices = new DacServices(sourceBuilder.ConnectionString);
-			sourceServices.ProgressChanged += (s, e) =>
-			{
-				if(e.Status == DacOperationStatus.Running)
-					Console.WriteLine(e.Message);
-			};
-			DacExtractOptions extractOptions = new DacExtractOptions
-			{
-				IgnorePermissions = false,
-				IgnoreUserLoginMappings = true
-			};
+			return Extract(SourceServerName, SourceDatabaseName, packageFile, "source");
+		}
 
-			// Ensure the package file directory exists.
-			packageFile.Directory.Create();
+		/// <summary>
+		/// Extracts a <see cref="DacPackage"/> from the target database and returns it.
+		/// </summary>
+		public DacPackage ExtractTarget(FileInfo packageFile)
+		{
+			if(packageFile == null)
+				throw new ArgumentNullException("packageFile");
 
-			sourceServices.Extract(packageFile.FullName, SourceDatabaseName, SourceDatabaseName, new Version(1, 0), extractOptions: extractOptions);
-			return DacPackage.Load(packageFile.FullName);
+			// Verify properties.
+			if(String.IsNullOrWhiteSpace(this.TargetServerName))
+				throw new InvalidOperationException("Set the SourceServerName property before calling the ExtractTarget() method.");
+			if(String.IsNullOrWhiteSpace(this.TargetDatabaseName))
+				throw new InvalidOperationException("Set the SourceDatabaseName property before calling the ExtractTarget() method.");
+
+			return Extract(TargetServerName, TargetDatabaseName, packageFile, "target");
+		}
+
+		public string GenerateReport()
+		{
+			VerifyProperties("GenerateReport");
+
+			// Get the database deployment options.
+			DacDeployOptions deployOptions = GetDeployOptions();
+
+			// Use the package from the SourcePackage property.
+			// But if that is null, then create a temporary package.
+			// Use try/finally to ensure that the temporary file gets deleted.
+			DacPackage tempSourcePackage = SourcePackage;
+			FileInfo tempSourcePackageFile = null;
+			string deployReport;
+			try
+			{
+				if(tempSourcePackage == null)
+				{
+					tempSourcePackageFile = new FileInfo(Path.GetTempFileName());
+					tempSourcePackage = ExtractSource(tempSourcePackageFile);
+				}
+
+				// Generate the deploy report.
+				if(this.TargetPackage == null)
+				{
+					// If the target package is not specified, then create a DacServices instance
+					// and use the GenerateDeployReport instance method that takes a target database name.
+					DacServices targetServices = GetTargetDacServices();
+					deployReport = targetServices.GenerateDeployReport(tempSourcePackage, TargetDatabaseName, deployOptions);
+				}
+				else
+				{
+					// Otherwise, since the target package is specified, use the DacServices.GenerateDeployReport
+					// static method that takes a target package.
+					deployReport = DacServices.GenerateDeployReport(tempSourcePackage, TargetPackage, TargetDatabaseName ?? TargetPackage.Name, deployOptions);
+				}
+			}
+			finally
+			{
+				if(tempSourcePackageFile != null)
+					tempSourcePackageFile.Delete();
+			}
+
+			return deployReport;
 		}
 
 		public bool GenerateScript(TextWriter writer, bool dropObjectsNotInSource = true)
@@ -74,38 +115,11 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 			if(writer == null)
 				throw new ArgumentNullException("writer");
 
-			VerifyProperties();
+			VerifyProperties("GenerateScript");
 
-			SqlConnectionStringBuilder targetBuilder = new SqlConnectionStringBuilder
-			{
-				DataSource = TargetServerName,
-				InitialCatalog = TargetDatabaseName,
-				IntegratedSecurity = true
-			};
-			DacServices targetServices = new DacServices(targetBuilder.ConnectionString);
-
-			// Set the database deployment options.
-			// Note that even though options such as keyword casing, simicolons, and whitespace
-			// don't affect the runtime behavior, we want to compare these so that we can
-			// achieve source-code level equivalence between the source and target
-			// (script files generate from the databases should be identical).
-			DacDeployOptions deployOptions = new DacDeployOptions
-			{
-				AllowDropBlockingAssemblies = true,
-				BlockOnPossibleDataLoss = false,
-				CommentOutSetVarDeclarations = true,
-				DropObjectsNotInSource = true,
-				DropPermissionsNotInSource = true,
-				DropRoleMembersNotInSource = true,
-				GenerateSmartDefaults = true,
-				IgnoreAnsiNulls = false,
-				IgnoreKeywordCasing = false,
-				IgnoreQuotedIdentifiers = false,
-				IgnoreSemicolonBetweenStatements = false,
-				IgnoreWhitespace = false,
-				ScriptDatabaseCollation = true,
-				ScriptDatabaseCompatibility = true
-			};
+			// Get the database deployment options.
+			DacDeployOptions deployOptions = GetDeployOptions();
+			deployOptions.DropObjectsNotInSource = dropObjectsNotInSource;
 
 			// Use the package from the SourcePackage property.
 			// But if that is null, then create a temporary package.
@@ -122,7 +136,19 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 				}
 
 				// Generate the deploy script (schema upgrade).
-				deployScript = targetServices.GenerateDeployScript(SourcePackage, TargetDatabaseName, options: deployOptions); ;
+				if(this.TargetPackage == null)
+				{
+					// If the target package is not specified, then create a DacServices instance
+					// and use the GenerateDeployScript instance method that takes a target database name.
+					DacServices targetServices = GetTargetDacServices();
+					deployScript = targetServices.GenerateDeployScript(tempSourcePackage, TargetDatabaseName, deployOptions);
+				}
+				else
+				{
+					// Otherwise, since the target package is specified, use the DacServices.GenerateDeployScript
+					// static method that takes a target package.
+					deployScript = DacServices.GenerateDeployScript(tempSourcePackage, TargetPackage, TargetDatabaseName ?? TargetPackage.Name, deployOptions);
+				}
 			}
 			finally
 			{
@@ -144,6 +170,82 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 				writer.Write(deployScript);
 				return true;
 			}
+		}
+
+		private static DacPackage Extract(string serverName, string databaseName, FileInfo packageFile, string label)
+		{
+			SqlConnectionStringBuilder connectionStringBuilder = new SqlConnectionStringBuilder
+			{
+				DataSource = serverName,
+				InitialCatalog = databaseName,
+				IntegratedSecurity = true
+			};
+			DacServices dacServices = new DacServices(connectionStringBuilder.ConnectionString);
+			dacServices.ProgressChanged += (s, e) =>
+			{
+				if(e.Status == DacOperationStatus.Running)
+					Console.WriteLine("{0} ({1})", e.Message, label);
+			};
+			DacExtractOptions extractOptions = new DacExtractOptions
+			{
+				IgnorePermissions = false,
+				IgnoreUserLoginMappings = true,
+				Storage = DacSchemaModelStorageType.Memory
+			};
+
+			// Ensure the package file directory exists.
+			packageFile.Directory.Create();
+
+			dacServices.Extract(packageFile.FullName, databaseName, databaseName, new Version(1, 0), extractOptions: extractOptions);
+			return DacPackage.Load(packageFile.FullName);
+		}
+
+		/// <summary>
+		/// Get the database deployment options.
+		/// </summary>
+		/// <remarks>
+		/// Note that even though options such as keyword casing, simicolons, and whitespace
+		/// don't affect the runtime behavior, we want to compare these so that we can
+		/// achieve source-code level equivalence between the source and target
+		/// (script files generate from the databases should be identical).
+		/// </remarks>
+		private static DacDeployOptions GetDeployOptions()
+		{
+			return new DacDeployOptions
+			{
+				AllowDropBlockingAssemblies = true,
+				BlockOnPossibleDataLoss = false,
+				CommentOutSetVarDeclarations = true,
+				DropObjectsNotInSource = true,
+				DropPermissionsNotInSource = true,
+				DropRoleMembersNotInSource = true,
+				GenerateSmartDefaults = true,
+				IgnoreAnsiNulls = false,
+				IgnoreKeywordCasing = false,
+				IgnoreQuotedIdentifiers = false,
+				IgnoreSemicolonBetweenStatements = false,
+				IgnoreWhitespace = false,
+				ScriptDatabaseCollation = true,
+				ScriptDatabaseCompatibility = true
+			};
+		}
+
+		/// <summary>
+		/// Apply the appropriate SET options (ANSI_NULLS, ANSI_PADDING, etc).
+		/// </summary>
+		/// <remarks>
+		/// These are the SET options required for updates to tables that affect filtered indexes, indexes on views,
+		/// or indexes computed columns.
+		/// See http://msdn.microsoft.com/en-us/library/ms188783.aspx
+		/// (the "Required SET Options for Filtered Indexes" section)
+		/// and http://msdn.microsoft.com/en-us/library/ms190356.aspx
+		/// (the "When you are creating and manipulating indexes on computed columns or indexed views..." paragraph).
+		/// </remarks>
+		private static void SetOptions(TextWriter writer)
+		{
+			writer.WriteLine("SET ANSI_NULLS, ANSI_PADDING, ANSI_WARNINGS, ARITHABORT, CONCAT_NULL_YIELDS_NULL, QUOTED_IDENTIFIER ON;");
+			writer.WriteLine("SET NUMERIC_ROUNDABORT OFF;");
+			writer.WriteLine("GO");
 		}
 
 		/// <summary>
@@ -182,37 +284,35 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 			return deployScript;
 		}
 
-		/// <summary>
-		/// Apply the appropriate SET options (ANSI_NULLS, ANSI_PADDING, etc).
-		/// </summary>
-		/// <remarks>
-		/// These are the SET options required for updates to tables that affect filtered indexes, indexes on views,
-		/// or indexes computed columns.
-		/// See http://msdn.microsoft.com/en-us/library/ms188783.aspx
-		/// (the "Required SET Options for Filtered Indexes" section)
-		/// and http://msdn.microsoft.com/en-us/library/ms190356.aspx
-		/// (the "When you are creating and manipulating indexes on computed columns or indexed views..." paragraph).
-		/// </remarks>
-		private void SetOptions(TextWriter writer)
+		private DacServices GetTargetDacServices()
 		{
-			writer.WriteLine("SET ANSI_NULLS, ANSI_PADDING, ANSI_WARNINGS, ARITHABORT, CONCAT_NULL_YIELDS_NULL, QUOTED_IDENTIFIER ON;");
-			writer.WriteLine("SET NUMERIC_ROUNDABORT OFF;");
-			writer.WriteLine("GO");
+			SqlConnectionStringBuilder targetBuilder = new SqlConnectionStringBuilder
+			{
+				DataSource = TargetServerName,
+				InitialCatalog = TargetDatabaseName,
+				IntegratedSecurity = true
+			};
+			DacServices targetServices = new DacServices(targetBuilder.ConnectionString);
+
+			return targetServices;
 		}
 
-		private void VerifyProperties()
+		private void VerifyProperties(string method)
 		{
 			if(this.SourcePackage == null)
 			{
 				if(String.IsNullOrWhiteSpace(this.SourceServerName))
-					throw new InvalidOperationException("Set the SourceServerName or SourcePackage property before calling the GenerateScript() method.");
+					throw new InvalidOperationException("Set the SourceServerName or SourcePackage property before calling the " + method + "() method.");
 				if(String.IsNullOrWhiteSpace(this.SourceDatabaseName))
-					throw new InvalidOperationException("Set the SourceDatabaseName or SourcePackage property before calling the GenerateScript() method.");
+					throw new InvalidOperationException("Set the SourceDatabaseName or SourcePackage property before calling the " + method + "() method.");
 			}
-			if(String.IsNullOrWhiteSpace(this.TargetServerName))
-				throw new InvalidOperationException("Set the TargetServerName property before calling the GenerateScript() method.");
-			if(String.IsNullOrWhiteSpace(this.TargetDatabaseName))
-				throw new InvalidOperationException("Set the TargetDatabaseName property before calling the GenerateScript() method.");
+			if(this.TargetPackage == null)
+			{
+				if(String.IsNullOrWhiteSpace(this.TargetServerName))
+					throw new InvalidOperationException("Set the TargetServerName or TargetPackage property before calling the " + method + "() method.");
+				if(String.IsNullOrWhiteSpace(this.TargetDatabaseName))
+					throw new InvalidOperationException("Set the TargetDatabaseName or TargetPackage property before calling the " + method + "() method.");
+			}
 		}
 	}
 }
