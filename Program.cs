@@ -96,7 +96,17 @@ namespace Mercent.SqlServer.Management
 				return;
 			}
 
-			scripter.GenerateScripts();
+			try
+			{
+				scripter.GenerateScripts();
+			}
+			catch(AbortException)
+			{
+				// Catch and swallow an abort exception.
+				// The error was already output and the user was
+				// prompted whether to continue. The user chose
+				// not to continue (so abort).
+			}
 		}
 	}
 }

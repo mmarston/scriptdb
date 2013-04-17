@@ -53,6 +53,7 @@
     <Reference Include="System.Xml.Linq" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AbortException.cs" />
     <Compile Include="DependencySorter.cs" />
     <Compile Include="FileScripter.cs" />
     <Compile Include="IDependencyNode.cs" />

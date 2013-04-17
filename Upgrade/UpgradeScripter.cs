@@ -30,6 +30,9 @@ namespace Mercent.SqlServer.Management.Upgrade
 	{
 		private const string elapsedTimeFormat = @"hh\:mm\:ss";
 
+		private bool hasUpgradeScript = false;
+		private bool hasUpgradeScriptError = false;
+
 		public UpgradeScripter()
 		{
 			// Default to empty string, which uses current directory.
@@ -61,6 +64,8 @@ namespace Mercent.SqlServer.Management.Upgrade
 		public void GenerateScripts()
 		{
 			VerifyProperties();
+			hasUpgradeScript = false;
+			hasUpgradeScriptError = false;
 
 			SchemaUpgradeScripter schemaUpgradeScripter = new SchemaUpgradeScripter
 			{
@@ -73,18 +78,13 @@ namespace Mercent.SqlServer.Management.Upgrade
 			if(!String.IsNullOrWhiteSpace(OutputDirectory) && !Directory.Exists(OutputDirectory))
 				Directory.CreateDirectory(OutputDirectory);
 
-			Stopwatch stopwatch = new Stopwatch();
-			bool hasUpgradeScript = false;
-			bool upgradeSucceeded;
+			bool upgradedTargetMatchesSource;
 			FileInfo sourcePackageFile = new FileInfo(Path.Combine(OutputDirectory, "Source.dacpac"));
 			FileInfo targetPackageFile = new FileInfo(Path.Combine(OutputDirectory, "Target.dacpac"));
 			FileInfo upgradeFile = new FileInfo(Path.Combine(OutputDirectory, "Upgrade.sql"));
-			FileInfo schemaPrepFile = new FileInfo(Path.Combine(OutputDirectory, "SchemaPrep.sql"));
 			FileInfo schemaUpgradeFile = new FileInfo(Path.Combine(OutputDirectory, "SchemaUpgrade.sql"));
 			FileInfo schemaUpgradeReportFile = new FileInfo(Path.Combine(OutputDirectory, "Log", "SchemaUpgradeReport.xml"));
-			FileInfo dataPrepFile = new FileInfo(Path.Combine(OutputDirectory, "DataPrep.sql"));
 			FileInfo dataUpgradeFile = new FileInfo(Path.Combine(OutputDirectory, "DataUpgrade.sql"));
-			FileInfo afterUpgradeFile = new FileInfo(Path.Combine(OutputDirectory, "AfterUpgrade.sql"));
 			FileInfo schemaFinalFile = new FileInfo(Path.Combine(OutputDirectory, "SchemaFinal.sql"));
 			DirectoryInfo expectedDirectory = new DirectoryInfo(Path.Combine(OutputDirectory, @"Compare\Expected"));
 			DirectoryInfo actualDirectory = new DirectoryInfo(Path.Combine(OutputDirectory, @"Compare\Actual"));
@@ -93,16 +93,12 @@ namespace Mercent.SqlServer.Management.Upgrade
 			{
 				upgradeWriter = upgradeFile.CreateText();
 				
+				// Run schema prep scripts (if any) and add them to the upgrade script
+				// before comparing the schema.
+				SchemaPrep(upgradeWriter);
+
 				// Extract the source package in parallel.
 				Task<DacPackage> extractSourceTask = Task.Run(() => ExtractSource(schemaUpgradeScripter, sourcePackageFile));
-
-				// If a schema prep file exists and is not empty then add it
-				// to the upgrade script and run it on the target before comparing the schema.
-				if(schemaPrepFile.Exists && schemaPrepFile.Length > 0)
-				{
-					hasUpgradeScript = true;
-					AddAndExecute(upgradeWriter, schemaPrepFile);
-				}
 
 				// Extract the target package.
 				schemaUpgradeScripter.TargetPackage = ExtractTarget(schemaUpgradeScripter, targetPackageFile);
@@ -124,32 +120,21 @@ namespace Mercent.SqlServer.Management.Upgrade
 				// However, that caused schema upgrade failures when a new object in the source has the same
 				// name as a target object to be dropped (e.g. replacing a table with a view of the same name).
 				bool dropObjectsNotInSource = true;
-				if(SchemaUpgrade(upgradeWriter, schemaUpgradeScripter, schemaUpgradeFile, schemaUpgradeReportFile, dropObjectsNotInSource))
-					hasUpgradeScript = true;
+				SchemaUpgrade(upgradeWriter, schemaUpgradeScripter, schemaUpgradeFile, schemaUpgradeReportFile, dropObjectsNotInSource);
 
-				// If a data prep file exists and is not empty then add it
-				// to the upgrade script and run it on the target before comparing the data.
-				if(dataPrepFile.Exists && dataPrepFile.Length > 0)
-				{
-					hasUpgradeScript = true;
-					AddAndExecute(upgradeWriter, dataPrepFile);
-				}
-
+				// Run data prep scripts (if any) and add them to the upgrade script
+				// before comparing the data.
+				DataPrep(upgradeWriter);
+				
 				// Generate the data upgrade script.
-				if(DataUpgrade(upgradeWriter, dataUpgradeFile))
-					hasUpgradeScript = true;
+				DataUpgrade(upgradeWriter, dataUpgradeFile);
 
-				// If an after upgrade file exists and is not empty then add it
-				// to the upgrade script and run it on the target before verifying.
-				if(afterUpgradeFile.Exists && afterUpgradeFile.Length > 0)
-				{
-					hasUpgradeScript = true;
-					AddAndExecute(upgradeWriter, dataPrepFile);
-				}
+				// Run after upgrade scripts files (if any) and add them to the upgrade script
+				// before verifying.
+				AfterUpgrade(upgradeWriter);
 
 				// Generate the final schema upgrade script.
-				if(SchemaUpgradeFinal(upgradeWriter, schemaUpgradeScripter, schemaFinalFile))
-					hasUpgradeScript = true;
+				SchemaUpgradeFinal(upgradeWriter, schemaUpgradeScripter, schemaFinalFile);
 
 				// Generate a clean set of scripts for the source database (the "expected" result) in parallel.
 				Task generateSourceCreateScriptsTask = Task.Run(() => GenerateSourceCreateScripts(expectedDirectory));
@@ -162,7 +147,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 
 				// Verify if the upgrade scripts succeed by checking if the database
 				// script files in the directories are identical.
-				upgradeSucceeded = AreDirectoriesIdentical(expectedDirectory, actualDirectory);
+				upgradedTargetMatchesSource = AreDirectoriesIdentical(expectedDirectory, actualDirectory);
 			}
 			finally
 			{
@@ -181,15 +166,28 @@ namespace Mercent.SqlServer.Management.Upgrade
 			if(!hasUpgradeScript)
 				upgradeFile.Delete();
 
-			// Output potential data issues
-			if(hasUpgradeScript && upgradeSucceeded)
+			// Output potential data issues only if there were no errors
+			// and the upgraded target matches the source.
+			// (Otherwise the user should focus on correcting the scripts
+			// to get the target to match the source.)
+			if(hasUpgradeScript && !hasUpgradeScriptError && upgradedTargetMatchesSource)
 				OutputDataIssues(schemaUpgradeReportFile);
 					
-			OutputSummaryMessage(hasUpgradeScript, upgradeSucceeded);
+			OutputSummaryMessage(upgradedTargetMatchesSource);
+		}
+
+		private void AddAndExecute(TextWriter writer, IEnumerable<FileInfo> scriptFiles)
+		{
+			foreach(FileInfo scriptFile in scriptFiles)
+			{
+				AddAndExecute(writer, scriptFile);
+			}
 		}
 
 		private void AddAndExecute(TextWriter writer, FileInfo scriptFile)
 		{
+			hasUpgradeScript = true;
+
 			// Include a reference to the script in the Upgrade.sql script.
 			writer.WriteLine("PRINT 'Starting {0}.';", scriptFile.Name);
 			writer.WriteLine("GO");
@@ -206,16 +204,46 @@ namespace Mercent.SqlServer.Management.Upgrade
 			int exitCode = ScriptUtility.RunSqlCmd(TargetServerName, TargetDatabaseName, scriptFile, logFile: logFile);
 			if(exitCode != 0)
 			{
-				Console.ForegroundColor = ConsoleColor.Red;
-				Console.Error.WriteLine
+				hasUpgradeScriptError = true;
+				string message = String.Format
 				(
-					"\r\n{0} script failed. Check the log file for error messages:\r\n{1}\r\n",
+					"{0} script failed. Check the log file for error messages:\r\n{1}\r\n",
 					scriptFile.Name,
 					logFile.FullName
 				);
+				Console.ForegroundColor = ConsoleColor.Red;
+				Console.Error.WriteLine();
+				Console.Error.WriteLine(message);
 				Console.ResetColor();
-				// TODO: abort when non-zero exit code.
+				if(!PromptContinue())
+				{
+					throw new AbortException(message);
+				}
 			}
+		}
+
+		private IEnumerable<FileInfo> AddAndExecuteFiles(TextWriter writer, string filePattern)
+		{
+			DirectoryInfo directory = GetOutputDirectory();
+
+			// Get the files, in sorted order.
+			var scriptFiles = directory.GetFiles(filePattern)
+				.OrderBy(f => f.Name)
+				.ToList();
+
+			// Add and execute the files.
+			foreach(FileInfo scriptFile in scriptFiles)
+			{
+				AddAndExecute(writer, scriptFile);
+			}
+
+			return scriptFiles;
+		}
+
+		private bool AfterUpgrade(TextWriter writer)
+		{
+			var scriptFiles = AddAndExecuteFiles(writer, "AfterUpgrade*.sql");
+			return scriptFiles.Any();
 		}
 
 		private bool AreDirectoriesIdentical(DirectoryInfo expectedDirectory, DirectoryInfo actualDirectory)
@@ -245,6 +273,12 @@ namespace Mercent.SqlServer.Management.Upgrade
 				}
 			}
 			return allIdentical;
+		}
+
+		private bool DataPrep(TextWriter writer)
+		{
+			var scriptFiles = AddAndExecuteFiles(writer, "DataPrep*.sql");
+			return scriptFiles.Any();
 		}
 
 		private bool DataUpgrade(TextWriter upgradeWriter, FileInfo dataUpgradeFile)
@@ -398,33 +432,13 @@ namespace Mercent.SqlServer.Management.Upgrade
 			return directory;
 		}
 
-		private void OutputSummaryMessage(bool hasUpgradeScript, bool upgradeSucceeded)
+		private DirectoryInfo GetOutputDirectory()
 		{
-			Console.WriteLine();
-			try
-			{
-				if(upgradeSucceeded)
-				{
-					Console.ForegroundColor = ConsoleColor.White;
-					if(hasUpgradeScript)
-					{
-						Console.WriteLine("Upgrade scripts successfully generated and verified.");
-					}
-					else
-						Console.WriteLine("No upgrade necessary.");
-				}
-				else
-				{
-					Console.ForegroundColor = ConsoleColor.Red;
-					Console.Error.WriteLine("Upgrade scripts failed verification. Review the files that failed verification and add manual steps to a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
-				}
-			}
-			finally
-			{
-				Console.ResetColor();
-			}
+			if(OutputDirectory == String.Empty)
+				return new DirectoryInfo(Directory.GetCurrentDirectory());
+			else
+				return new DirectoryInfo(OutputDirectory);
 		}
-
 
 		/// <summary>
 		/// Warn the user about potential data issues.
@@ -456,6 +470,77 @@ namespace Mercent.SqlServer.Management.Upgrade
 					Console.ResetColor();
 				}
 			}
+		}
+
+		private void OutputSummaryMessage(bool upgradedTargetMatchesSource)
+		{
+			Console.WriteLine();
+			try
+			{
+				if(hasUpgradeScriptError)
+				{
+					Console.ForegroundColor = ConsoleColor.Red;
+					Console.Error.WriteLine("Upgrade scripts failed to execute. Review the scripts that failed and add or correct manual steps in a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
+				}
+				else if(upgradedTargetMatchesSource)
+				{
+					Console.ForegroundColor = ConsoleColor.White;
+					if(hasUpgradeScript)
+					{
+						Console.WriteLine("Upgrade scripts successfully generated and verified.");
+					}
+					else
+						Console.WriteLine("No upgrade necessary.");
+				}
+				else
+				{
+					Console.ForegroundColor = ConsoleColor.Red;
+					Console.Error.WriteLine("Upgrade scripts failed verification. Review the files that failed verification and add manual steps to a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
+				}
+			}
+			finally
+			{
+				Console.ResetColor();
+			}
+		}
+
+		/// <summary>
+		/// Prompts the user whether to continue (y/n).
+		/// </summary>
+		/// <remarks>
+		/// This method continues prompting until the user presses y, Y, n, or N.
+		/// </remarks>
+		/// <returns>
+		/// true if the user presses 'y'; false if the user presses 'n'
+		/// </returns>
+		private bool PromptContinue()
+		{
+			// Clear any keys pressed before the prompt was displayed.
+			// Use a for loop instead of a while loop to avoid any chance of an infinite loop.
+			for(int i = 0; i < 1000 && Console.KeyAvailable; i++)
+				Console.Read();
+			while(true)
+			{
+				Console.Write("Continue (y/n)? ");
+				ConsoleKeyInfo key = Console.ReadKey();
+				char ch = key.KeyChar;
+				if(ch == 'y' || ch == 'Y')
+				{
+					Console.WriteLine("\r\nContinuing...");
+					return true;
+				}
+				else if(ch == 'n' || ch == 'N')
+				{
+					Console.WriteLine("\r\nAborting...");
+					return false;
+				}
+			}
+		}
+
+		private bool SchemaPrep(TextWriter writer)
+		{
+			var scriptFiles = AddAndExecuteFiles(writer, "SchemaPrep*.sql");
+			return scriptFiles.Any();
 		}
 
 		private bool SchemaUpgrade(TextWriter upgradeWriter, SchemaUpgradeScripter schemaUpgradeScripter, FileInfo schemaUpgradeFile, FileInfo schemaUpgradeReportFile, bool dropObjectsNotInSource)
