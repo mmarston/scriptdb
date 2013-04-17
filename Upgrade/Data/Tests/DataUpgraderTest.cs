@@ -476,6 +476,22 @@ GO
 		}
 
 		[TestMethod]
+		public void SourceOnlyTest()
+		{
+			string[] script1 = { CreateTestTable1, InsertTestTable1_one };
+			string[] script2 = { };
+			ExecuteTest(script1, script2, expectedScript: String.Empty, expectedResult: false);
+		}
+
+		[TestMethod]
+		public void TargetOnlyTest()
+		{
+			string[] script1 = { };
+			string[] script2 = { CreateTestTable1, InsertTestTable1_one };
+			ExecuteTest(script1, script2, expectedScript: String.Empty, expectedResult: false);
+		}
+
+		[TestMethod]
 		public void TriggerDeleteDisableTest()
 		{
 			string[] script1 = { CreateTestTable1, CreateDeleteTriggerOnTable1, CreateInsertTriggerOnTable1, CreateUpdateTriggerOnTable1 };

@@ -36,7 +36,8 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 		private List<Index> indexesToDisable = new List<Index>();
 		private DataUpgradeOptions options;
 		private List<TableInfo> orderedTables = new List<TableInfo>();
-		private Database sourceSmoDatabase;
+		private Database sourceDatabase;
+		private Database targetDatabase;
 		private List<Trigger> triggersToDisable = new List<Trigger>();
 		private ScriptUtility utility;
 		private TextWriter writer;
@@ -87,9 +88,11 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 
 			try
 			{
-				Server server = new Server(SourceServerName);
-				this.sourceSmoDatabase = server.Databases[SourceDatabaseName];
-				this.utility = new ScriptUtility(this.sourceSmoDatabase);
+				Server sourceServer = new Server(SourceServerName);
+				Server targetServer = new Server(TargetServerName);
+				this.sourceDatabase = sourceServer.Databases[TargetDatabaseName];
+				this.targetDatabase = targetServer.Databases[TargetDatabaseName];
+				this.utility = new ScriptUtility(this.targetDatabase);
 
 				// Compare the source and target tables and generate DELETE, INSERT, and UPDATE statements.
 				GenerateStatements();
@@ -130,7 +133,7 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 			finally
 			{
 				ClearCollections();
-				sourceSmoDatabase = null;
+				targetDatabase = null;
 				writer = null;
 			}
 		}
@@ -531,11 +534,21 @@ WHERE EXISTS
 		{
 			// Loop through the tables with data and generate
 			// statements for the changed data.
-			TableCollection sourceTables = this.sourceSmoDatabase.Tables;
+			TableCollection sourceTables = this.sourceDatabase.Tables;
+			TableCollection targetTables = this.targetDatabase.Tables;
 			foreach(var tableKey in GetTablesWithData())
 			{
-				Table table = sourceTables[tableKey.Name, tableKey.Schema];
-				TableInfo tableInfo = CreateTableInfo(table);
+				Table sourceTable = sourceTables[tableKey.Name, tableKey.Schema];
+				Table targetTable = targetTables[tableKey.Name, tableKey.Schema];
+
+				// Skip the table if it only exists in the source or target.
+				// To prevent errors we should also check that the tables have the same columns.
+				// If the columns are different then the SQL query that compares the data will fail.
+				if(sourceTable == null || targetTable == null)
+					continue;
+
+				TableInfo tableInfo = CreateTableInfo(targetTable);
+
 				// GenerateStatements will populate the collections of delete, insert, and update statements.
 				// (the DeleteStatements, InsertStatements, and UpdateStatements properties of GeneratorTableInfo).
 				GenerateStatements(tableInfo);
@@ -847,7 +860,7 @@ WHERE EXISTS
 		{
 			// Now loop through the tables with changes and check for foreign keys
 			// that reference tables that have changes.
-			foreach(Table table in sourceSmoDatabase.Tables)
+			foreach(Table table in targetDatabase.Tables)
 			{
 				foreach(ForeignKey foreignKey in table.ForeignKeys)
 				{
