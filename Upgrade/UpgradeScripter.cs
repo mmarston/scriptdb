@@ -18,6 +18,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Xml;
 using System.Xml.Linq;
 using Mercent.SqlServer.Management.IO;
 using Mercent.SqlServer.Management.Upgrade.Data;
@@ -37,8 +38,10 @@ namespace Mercent.SqlServer.Management.Upgrade
 		{
 			// Default to empty string, which uses current directory.
 			OutputDirectory = String.Empty;
+			Encoding = Encoding.Default;
 		}
 
+		public Encoding Encoding { get; set; }
 		public string OutputDirectory { get; set; }
 		public string SourceDatabaseName { get; set; }
 
@@ -91,7 +94,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			TextWriter upgradeWriter = null;
 			try
 			{
-				upgradeWriter = upgradeFile.CreateText();
+				upgradeWriter = CreateText(upgradeFile);
 				
 				// Run schema prep scripts (if any) and add them to the upgrade script
 				// before comparing the schema.
@@ -201,7 +204,9 @@ namespace Mercent.SqlServer.Management.Upgrade
 			string logFileName = Path.ChangeExtension(scriptFile.Name, ".txt");
 			FileInfo logFile = new FileInfo(Path.Combine(OutputDirectory, "Log", logFileName));
 
+			var stopwatch = Stopwatch.StartNew();
 			int exitCode = ScriptUtility.RunSqlCmd(TargetServerName, TargetDatabaseName, scriptFile, logFile: logFile);
+			stopwatch.Stop();
 			if(exitCode != 0)
 			{
 				hasUpgradeScriptError = true;
@@ -219,6 +224,11 @@ namespace Mercent.SqlServer.Management.Upgrade
 				{
 					throw new AbortException(message);
 				}
+			}
+			else if(stopwatch.ElapsedMilliseconds > 1000)
+			{
+				// If the script took more than 1 second, output the elapsed time.
+				Console.WriteLine("Finished executing {0} script ({1} elapsed).", scriptFile.Name, stopwatch.Elapsed.ToString(elapsedTimeFormat));
 			}
 		}
 
@@ -275,6 +285,19 @@ namespace Mercent.SqlServer.Management.Upgrade
 			return allIdentical;
 		}
 
+		/// <summary>
+		/// Creates a text writer for the script file.
+		/// </summary>
+		/// <remarks>
+		/// There are several locations in the UpgradeScripter class that need a text writer
+		/// to write to a script file. This method standardizes the creation of the writer
+		/// with the correct options (particularly the encoding).
+		/// </remarks>
+		private TextWriter CreateText(FileInfo file)
+		{
+			return new StreamWriter(file.FullName, false, Encoding.Default);
+		}
+
 		private bool DataPrep(TextWriter writer)
 		{
 			var scriptFiles = AddAndExecuteFiles(writer, "DataPrep*.sql");
@@ -296,7 +319,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 				TargetDatabaseName = TargetDatabaseName
 			};
 
-			using(TextWriter writer = dataUpgradeFile.CreateText())
+			using(TextWriter writer = CreateText(dataUpgradeFile))
 			{
 				hasDataChanges = dataUpgradeScripter.GenerateScript(writer);
 			}
@@ -367,7 +390,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			FileInfo logFile = new FileInfo(Path.Combine(this.OutputDirectory, "Log", logFileName));
 			// Ensure the Log directory exists.
 			logFile.Directory.Create();
-			using(TextWriter logWriter = logFile.CreateText())
+			using(TextWriter logWriter = CreateText(logFile))
 			{
 				string lastProgressMessage = null;
 				fileScripter.ErrorMessageReceived += (s, e) =>
@@ -405,10 +428,16 @@ namespace Mercent.SqlServer.Management.Upgrade
 
 		private void GenerateSchemaUpgradeReport(SchemaUpgradeScripter schemaUpgradeScripter, FileInfo reportFile)
 		{
-			using(TextWriter writer = reportFile.CreateText())
+			string report = schemaUpgradeScripter.GenerateReport();
+			XmlReaderSettings readerSettings = new XmlReaderSettings { IgnoreWhitespace = true };
+			XmlWriterSettings writerSettings = new XmlWriterSettings { Indent = true, IndentChars = "\t" };
+			using(XmlReader reader = XmlReader.Create(new StringReader(report), readerSettings))
+			using(XmlWriter writer = XmlWriter.Create(reportFile.FullName, writerSettings))
 			{
-				string report = schemaUpgradeScripter.GenerateReport();
-				writer.Write(report);
+				if(reader.MoveToContent() != XmlNodeType.None)
+				{
+					writer.WriteNode(reader, false);
+				}
 			}
 		}
 
@@ -553,7 +582,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			// Generate the schema upgrade report in parallel.
 			Task generateSchemaUpgradeReportTask = Task.Run(() => GenerateSchemaUpgradeReport(schemaUpgradeScripter, schemaUpgradeReportFile));
 
-			using(TextWriter writer = schemaUpgradeFile.CreateText())
+			using(TextWriter writer = CreateText(schemaUpgradeFile))
 			{
 				hasSchemaChanges = schemaUpgradeScripter.GenerateScript(writer, dropObjectsNotInSource);
 			}
@@ -594,7 +623,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			// The SchemaUpgradeScripter will compare directly against the target database instead of the target package.
 			schemaUpgradeScripter.TargetPackage = null;
 
-			using(TextWriter writer = schemaFinalFile.CreateText())
+			using(TextWriter writer = CreateText(schemaFinalFile))
 			{
 				hasFinalSchemaChanges = schemaUpgradeScripter.GenerateScript(writer);
 			}
