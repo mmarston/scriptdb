@@ -85,8 +85,8 @@ namespace Mercent.SqlServer.Management.Upgrade
 			CreateDatabases();
 
 			bool upgradedTargetMatchesSource;
-			FileInfo sourcePackageFile = new FileInfo(Path.Combine(OutputDirectory, "Source.dacpac"));
-			FileInfo targetPackageFile = new FileInfo(Path.Combine(OutputDirectory, "Target.dacpac"));
+			FileInfo sourcePackageFile = new FileInfo(Path.Combine(OutputDirectory, "Temp", "Source.dacpac"));
+			FileInfo targetPackageFile = new FileInfo(Path.Combine(OutputDirectory, "Temp", "Target.dacpac"));
 			FileInfo upgradeFile = new FileInfo(Path.Combine(OutputDirectory, "Upgrade.sql"));
 			FileInfo schemaUpgradeFile = new FileInfo(Path.Combine(OutputDirectory, "SchemaUpgrade.sql"));
 			FileInfo schemaUpgradeReportFile = new FileInfo(Path.Combine(OutputDirectory, "Log", "SchemaUpgradeReport.xml"));
