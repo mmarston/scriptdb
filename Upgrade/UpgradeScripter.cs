@@ -100,7 +100,13 @@ namespace Mercent.SqlServer.Management.Upgrade
 			try
 			{
 				upgradeWriter = CreateText(upgradeFile);
-				
+
+				// Ensure that errors will cause the script to be aborted.
+				upgradeWriter.WriteLine("SET XACT_ABORT ON;");
+				upgradeWriter.WriteLine("GO");
+				upgradeWriter.WriteLine(":on error exit");
+				upgradeWriter.WriteLine("GO");
+
 				// Run schema prep scripts (if any) and add them to the upgrade script
 				// before comparing the schema.
 				SchemaPrep(upgradeWriter);
