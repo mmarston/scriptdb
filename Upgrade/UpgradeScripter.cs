@@ -17,6 +17,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
@@ -80,6 +81,8 @@ namespace Mercent.SqlServer.Management.Upgrade
 
 			if(!String.IsNullOrWhiteSpace(OutputDirectory) && !Directory.Exists(OutputDirectory))
 				Directory.CreateDirectory(OutputDirectory);
+
+			CreateDatabases();
 
 			bool upgradedTargetMatchesSource;
 			FileInfo sourcePackageFile = new FileInfo(Path.Combine(OutputDirectory, "Source.dacpac"));
@@ -285,6 +288,66 @@ namespace Mercent.SqlServer.Management.Upgrade
 			return allIdentical;
 		}
 
+		private void CreateDatabase(string serverName, string databaseName, string scriptDirectory)
+		{
+			Console.WriteLine("Creating database '{0}' on server '{1}'.", databaseName, serverName);
+			FileInfo scriptFile = new FileInfo(Path.Combine(scriptDirectory, "CreateDatabaseObjects.sql"));
+			FileInfo logFile = new FileInfo(Path.Combine(OutputDirectory, "Log", GetSafeFileName(databaseName) + ".txt"));
+
+			var stopwatch = Stopwatch.StartNew();
+			var variables = new Dictionary<string, string>
+			{
+				{ "DBNAME", databaseName },
+				{ "DROPDB", "true" }
+			};
+			int exitCode = ScriptUtility.RunSqlCmd(TargetServerName, null, scriptFile, variables, logFile);
+			stopwatch.Stop();
+			if(exitCode != 0)
+			{
+				string message = String.Format
+				(
+					"Failed to create database {0}. Check the log file for error messages:\r\n{1}\r\n",
+					databaseName,
+					logFile.FullName
+				);
+				Console.ForegroundColor = ConsoleColor.Red;
+				Console.Error.WriteLine();
+				Console.Error.WriteLine(message);
+				Console.ResetColor();
+				throw new AbortException(message);
+			}
+			else if(stopwatch.ElapsedMilliseconds > 1000)
+			{
+				// If the script took more than 1 second, output the elapsed time.
+				Console.WriteLine("Finished creating database {0} ({1} elapsed).", databaseName, stopwatch.Elapsed.ToString(elapsedTimeFormat));
+			}
+		}
+
+		/// <summary>
+		/// Create the source and target databases based on the scripts in the source and target directories (if provided).
+		/// </summary>
+		/// <remarks>
+		/// If the <see cref="SourceDirectory"/> then the source database is assumed to already exist.
+		/// If the <see cref="TargetDirectory"/> then the target database is assumed to already exist.
+		/// To improve performance this method creates the databases in parallel.
+		/// </remarks>
+		private void CreateDatabases()
+		{
+			Task createSourceDatabaseTask = null;
+
+			// If a SourceDirectory was specified, then create the source database (in parallel).
+			if(!String.IsNullOrEmpty(this.SourceDirectory))
+				createSourceDatabaseTask = Task.Run(() => CreateDatabase(SourceServerName, SourceDatabaseName, SourceDirectory));
+
+			// If a TargetDirectory was specified, then create the target database.
+			if(!String.IsNullOrEmpty(this.TargetDirectory))
+				CreateDatabase(TargetServerName, TargetDatabaseName, TargetDirectory);
+
+			// Wait for the parallel task to finish creating the source (if the task was even created).
+			if(createSourceDatabaseTask != null)
+				createSourceDatabaseTask.Wait();
+		}
+
 		/// <summary>
 		/// Creates a text writer for the script file.
 		/// </summary>
@@ -467,6 +530,16 @@ namespace Mercent.SqlServer.Management.Upgrade
 				return new DirectoryInfo(Directory.GetCurrentDirectory());
 			else
 				return new DirectoryInfo(OutputDirectory);
+		}
+
+		/// <summary>
+		/// Gets a safe file name by replacing sequences of invalid characters with an underscore.
+		/// </summary>
+		private string GetSafeFileName(string unsafeFileName)
+		{
+			char[] invalidChars = Path.GetInvalidFileNameChars();
+			string invalidPattern = "[" + Regex.Escape(new String(invalidChars)) + "]+";
+			return Regex.Replace(unsafeFileName, invalidPattern, "_");
 		}
 
 		/// <summary>

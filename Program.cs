@@ -72,7 +72,13 @@ namespace Mercent.SqlServer.Management
 		private static void ShowUsage()
 		{
 			string program = Path.GetFileName(Assembly.GetExecutingAssembly().Location);
-			Console.WriteLine("Usage: {0} ServerName DatabaseName [OutDirectory] [-SSDT]\r\n\t{0} -Upgrade ServerName SourceDatabase TargetDatabase [OutDirectory]", program);
+			Console.WriteLine
+			(
+				"Usages:\r\n"
+					+ "\t{0} <ServerName> <DatabaseName> [<OutDirectory>] [-SSDT]\r\n"
+					+ "\t{0} -Upgrade <ServerName> <SourceDatabase> <TargetDatabase> [<OutDirectory>] [-SourceDir[ectory] <SourceDirectory>] [-TargetDir[ectory] <TargetDirectory>]",
+				program
+			);
 		}
 
 		private static void Upgrade(string[] args)
@@ -87,13 +93,55 @@ namespace Mercent.SqlServer.Management
 			scripter.SourceServerName = scripter.TargetServerName = args[1];
 			scripter.SourceDatabaseName = args[2];
 			scripter.TargetDatabaseName = args[3];
-			if(args.Length > 4)
-				scripter.OutputDirectory = args[4];
-			if(args.Length > 5)
+			for(int i = 4; i < args.Length; i++)
 			{
-				Console.WriteLine("Unexpected argument: {0}", args[5]);
-				ShowUsage();
-				return;
+				string arg = args[i];
+				if
+				(
+					String.Equals(arg, "-SourceDir", StringComparison.OrdinalIgnoreCase)
+					|| String.Equals(arg, "-SourceDirectory", StringComparison.OrdinalIgnoreCase)
+				)
+				{
+					i++;
+					if(i < args.Length)
+					{
+						scripter.SourceDirectory = args[i];
+					}
+					else
+					{
+						Console.WriteLine("Missing value of {0} argument.", arg);
+						ShowUsage();
+						return;
+					}
+				}
+				else if
+				(
+					String.Equals(arg, "-TargetDir", StringComparison.OrdinalIgnoreCase)
+					|| String.Equals(arg, "-TargetDirectory", StringComparison.OrdinalIgnoreCase)
+				)
+				{
+					i++;
+					if(i < args.Length)
+					{
+						scripter.TargetDirectory = args[i];
+					}
+					else
+					{
+						Console.WriteLine("Missing value of {0} argument.", arg);
+						ShowUsage();
+						return;
+					}
+				}
+				else if(String.IsNullOrEmpty(scripter.OutputDirectory))
+				{
+					scripter.OutputDirectory = arg;
+				}
+				else
+				{
+					Console.WriteLine("Unexpected argument: {0}", arg);
+					ShowUsage();
+					return;
+				}
 			}
 
 			try
