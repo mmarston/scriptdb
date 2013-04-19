@@ -71,6 +71,8 @@ namespace Mercent.SqlServer.Management.Upgrade
 			hasUpgradeScript = false;
 			hasUpgradeScriptError = false;
 
+			var totalStopwatch = Stopwatch.StartNew();
+
 			SchemaUpgradeScripter schemaUpgradeScripter = new SchemaUpgradeScripter
 			{
 				SourceServerName = SourceServerName,
@@ -178,8 +180,9 @@ namespace Mercent.SqlServer.Management.Upgrade
 			// to get the target to match the source.)
 			if(hasUpgradeScript && !hasUpgradeScriptError && upgradedTargetMatchesSource)
 				OutputDataIssues(schemaUpgradeReportFile);
-					
-			OutputSummaryMessage(upgradedTargetMatchesSource);
+
+			totalStopwatch.Stop();
+			OutputSummaryMessage(upgradedTargetMatchesSource, totalStopwatch.Elapsed);
 		}
 
 		private void AddAndExecute(TextWriter writer, IEnumerable<FileInfo> scriptFiles)
@@ -574,7 +577,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			}
 		}
 
-		private void OutputSummaryMessage(bool upgradedTargetMatchesSource)
+		private void OutputSummaryMessage(bool upgradedTargetMatchesSource, TimeSpan elapsed)
 		{
 			Console.WriteLine();
 			try
@@ -582,23 +585,24 @@ namespace Mercent.SqlServer.Management.Upgrade
 				if(hasUpgradeScriptError)
 				{
 					Console.ForegroundColor = ConsoleColor.Red;
-					Console.Error.WriteLine("Upgrade scripts failed to execute. Review the scripts that failed and add or correct manual steps in a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
+					Console.Error.Write("Upgrade scripts failed to execute. Review the scripts that failed and add or correct manual steps in a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
 				}
 				else if(upgradedTargetMatchesSource)
 				{
 					Console.ForegroundColor = ConsoleColor.White;
 					if(hasUpgradeScript)
 					{
-						Console.WriteLine("Upgrade scripts successfully generated and verified.");
+						Console.Write("Upgrade scripts successfully generated and verified.");
 					}
 					else
-						Console.WriteLine("No upgrade necessary.");
+						Console.Write("No upgrade necessary.");
 				}
 				else
 				{
 					Console.ForegroundColor = ConsoleColor.Red;
-					Console.Error.WriteLine("Upgrade scripts failed verification. Review the files that failed verification and add manual steps to a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
+					Console.Error.Write("Upgrade scripts failed verification. Review the files that failed verification and add manual steps to a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
 				}
+				Console.WriteLine(" ({0} total elapsed)", elapsed.ToString(elapsedTimeFormat));
 			}
 			finally
 			{
