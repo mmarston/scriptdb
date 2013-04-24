@@ -563,7 +563,10 @@ WHERE EXISTS
 		{
 			// TODO: how do we want to handle a table with no key columns?
 			if(!tableInfo.KeyColumns.Any())
+			{
+				Console.Error.WriteLine("Warning: The table {0} has data but does not have a primary key or unique index.", tableInfo.QualifiedName);
 				return false;
+			}
 
 			string selectCommand = GenerateSelectQuery(tableInfo);
 			using(SqlDataReader reader = ExecuteTargetReader(selectCommand))

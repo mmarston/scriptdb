@@ -1137,6 +1137,18 @@ namespace Mercent.SqlServer.Management
 
 					if(table.RowCount > 0)
 					{
+						// If the table does not have a unique index (a primary key is a unique index)
+						// then output a warning.
+						if(!table.HasUniqueIndex())
+						{
+							string warning = String.Format
+							(
+								"Warning: The table {0}.{1} has data but does not have a primary key or unique index.",
+								MakeSqlBracket(table.Schema),
+								MakeSqlBracket(table.Name)
+							);
+							OnErrorMessageReceived(warning);
+						}
 						// If the table has any variant columns then we can't use a BCP text format.
 						if(table.HasAnyVariantColumns())
 						{

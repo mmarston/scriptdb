@@ -31,6 +31,16 @@ namespace Mercent.SqlServer.Management
 				.Any(c => c.DataType.SqlDataType == SqlDataType.Variant);
 		}
 
+		public static bool HasUniqueIndex(this Table table)
+		{
+			if(table == null)
+				throw new ArgumentNullException("table");
+
+			return table.Indexes
+				.Cast<Index>()
+				.Any(i => i.IsUnique);
+		}
+
 		public static bool IsSysDiagramsWithData(this Table table)
 		{
 			if(table == null)
