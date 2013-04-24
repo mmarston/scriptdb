@@ -204,16 +204,15 @@ namespace Mercent.SqlServer.Management.Upgrade
 		{
 			hasUpgradeScript = true;
 
-			// Include a reference to the script in the Upgrade.sql script.
-			writer.WriteLine("PRINT 'Starting {0}.';", scriptFile.Name);
+			writer.WriteLine("PRINT 'Starting ''{0}''.';", scriptFile.Name);
 			writer.WriteLine("GO");
 			writer.WriteLine(":r \"{0}\"", scriptFile.Name);
 			writer.WriteLine("GO");
-			writer.WriteLine("PRINT '{0} complete.';", scriptFile.Name);
+			writer.WriteLine("PRINT '''{0}'' complete.';", scriptFile.Name);
 			writer.WriteLine("GO");
 
 			// Run the script against the target database now.
-			ConsoleWriteLine("Executing {0} script.", scriptFile.Name);
+			ConsoleWriteLine("Executing '{0}' script.", scriptFile.Name);
 			string logFileName = Path.ChangeExtension(scriptFile.Name, ".txt");
 			FileInfo logFile = new FileInfo(Path.Combine(OutputDirectory, "Log", logFileName));
 
@@ -225,7 +224,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 				hasUpgradeScriptError = true;
 				string message = String.Format
 				(
-					"{0} script failed. Check the log file for error messages:\r\n{1}\r\n",
+					"'{0}' script failed. Check the log file for error messages:\r\n{1}\r\n",
 					scriptFile.Name,
 					logFile.FullName
 				);
@@ -239,7 +238,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			else if(stopwatch.ElapsedMilliseconds > 1000)
 			{
 				// If the script took more than 1 second, output the elapsed time.
-				ConsoleWriteLine("Finished executing {0} script ({1} elapsed).", scriptFile.Name, stopwatch.Elapsed.ToString(elapsedTimeFormat));
+				ConsoleWriteLine("Finished executing '{0}' script ({1} elapsed).", scriptFile.Name, stopwatch.Elapsed.ToString(elapsedTimeFormat));
 			}
 		}
 
