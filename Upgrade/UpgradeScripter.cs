@@ -45,6 +45,22 @@ namespace Mercent.SqlServer.Management.Upgrade
 
 		public Encoding Encoding { get; set; }
 		public string OutputDirectory { get; set; }
+
+		/// <summary>
+		/// The file name to use for a single output file (optional).
+		/// </summary>
+		/// <remarks>
+		/// Only set this property if you want a single combined upgrade script
+		/// containing all the statements from the individual scripts.
+		/// When this property is null (or empty) the main upgrade script
+		/// (saved to the <see cref="OutputDirectory"/> as "Upgrade.sql")
+		/// is just a wrapper that calls the individual scripts.
+		///
+		/// If SingleFileName is a file name or relative path, then it is saved
+		/// relative to the <see cref="OutputDirectory"/>.
+		/// Alternatively, use an absolute path for the file name.
+		/// </remarks>
+		public string SingleFileName { get; set; }
 		public string SourceDatabaseName { get; set; }
 
 		/// <summary>
@@ -90,7 +106,8 @@ namespace Mercent.SqlServer.Management.Upgrade
 			bool upgradedTargetMatchesSource;
 			FileInfo sourcePackageFile = new FileInfo(Path.Combine(OutputDirectory, "Temp", "Source.dacpac"));
 			FileInfo targetPackageFile = new FileInfo(Path.Combine(OutputDirectory, "Temp", "Target.dacpac"));
-			FileInfo upgradeFile = new FileInfo(Path.Combine(OutputDirectory, "Upgrade.sql"));
+			string upgradeFileName = String.IsNullOrEmpty(this.SingleFileName) ? "Upgrade.sql" : this.SingleFileName;
+			FileInfo upgradeFile = new FileInfo(Path.Combine(OutputDirectory, upgradeFileName));
 			FileInfo schemaUpgradeFile = new FileInfo(Path.Combine(OutputDirectory, "SchemaUpgrade.sql"));
 			FileInfo schemaUpgradeReportFile = new FileInfo(Path.Combine(OutputDirectory, "Log", "SchemaUpgradeReport.xml"));
 			FileInfo dataUpgradeFile = new FileInfo(Path.Combine(OutputDirectory, "DataUpgrade.sql"));
@@ -206,7 +223,12 @@ namespace Mercent.SqlServer.Management.Upgrade
 
 			writer.WriteLine("PRINT 'Starting ''{0}''.';", scriptFile.Name);
 			writer.WriteLine("GO");
-			writer.WriteLine(":r \"{0}\"", scriptFile.Name);
+			// Include a reference to the script in the main upgrade script.
+			// When using a single file, include the file content instead.
+			if(String.IsNullOrEmpty(SingleFileName))
+				writer.WriteLine(":r \"{0}\"", scriptFile.Name);
+			else
+				writer.WriteLine(File.ReadAllText(scriptFile.FullName, Encoding.Default));
 			writer.WriteLine("GO");
 			writer.WriteLine("PRINT '''{0}'' complete.';", scriptFile.Name);
 			writer.WriteLine("GO");

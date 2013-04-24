@@ -76,7 +76,7 @@ namespace Mercent.SqlServer.Management
 			(
 				"Usages:\r\n"
 					+ "\t{0} <ServerName> <DatabaseName> [<OutDirectory>] [-SSDT]\r\n"
-					+ "\t{0} -Upgrade <ServerName> <SourceDatabase> <TargetDatabase> [<OutDirectory>] [-SourceDir[ectory] <SourceDirectory>] [-TargetDir[ectory] <TargetDirectory>]",
+					+ "\t{0} -Upgrade <ServerName> <SourceDatabase> <TargetDatabase> [<OutDirectory>] [-SingleFile <FileName>] [-SourceDir[ectory] <SourceDirectory>] [-TargetDir[ectory] <TargetDirectory>]",
 				program
 			);
 		}
@@ -96,7 +96,21 @@ namespace Mercent.SqlServer.Management
 			for(int i = 4; i < args.Length; i++)
 			{
 				string arg = args[i];
-				if
+				if(String.Equals(arg, "-SingleFile", StringComparison.OrdinalIgnoreCase))
+				{
+					i++;
+					if(i < args.Length)
+					{
+						scripter.SingleFileName = args[i];
+					}
+					else
+					{
+						Console.WriteLine("Missing value of {0} argument.", arg);
+						ShowUsage();
+						return;
+					}
+				}
+				else if
 				(
 					String.Equals(arg, "-SourceDir", StringComparison.OrdinalIgnoreCase)
 					|| String.Equals(arg, "-SourceDirectory", StringComparison.OrdinalIgnoreCase)
