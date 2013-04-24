@@ -31,6 +31,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 	public class UpgradeScripter
 	{
 		private const string elapsedTimeFormat = @"hh\:mm\:ss";
+		private static readonly object consoleLock = new object();
 
 		private bool hasUpgradeScript = false;
 		private bool hasUpgradeScriptError = false;
@@ -212,7 +213,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			writer.WriteLine("GO");
 
 			// Run the script against the target database now.
-			Console.WriteLine("Executing {0} script.", scriptFile.Name);
+			ConsoleWriteLine("Executing {0} script.", scriptFile.Name);
 			string logFileName = Path.ChangeExtension(scriptFile.Name, ".txt");
 			FileInfo logFile = new FileInfo(Path.Combine(OutputDirectory, "Log", logFileName));
 
@@ -228,10 +229,8 @@ namespace Mercent.SqlServer.Management.Upgrade
 					scriptFile.Name,
 					logFile.FullName
 				);
-				Console.ForegroundColor = ConsoleColor.Red;
-				Console.Error.WriteLine();
-				Console.Error.WriteLine(message);
-				Console.ResetColor();
+				ErrorWriteLine();
+				ErrorWriteLine(message);
 				if(!PromptContinue())
 				{
 					throw new AbortException(message);
@@ -240,7 +239,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			else if(stopwatch.ElapsedMilliseconds > 1000)
 			{
 				// If the script took more than 1 second, output the elapsed time.
-				Console.WriteLine("Finished executing {0} script ({1} elapsed).", scriptFile.Name, stopwatch.Elapsed.ToString(elapsedTimeFormat));
+				ConsoleWriteLine("Finished executing {0} script ({1} elapsed).", scriptFile.Name, stopwatch.Elapsed.ToString(elapsedTimeFormat));
 			}
 		}
 
@@ -270,36 +269,71 @@ namespace Mercent.SqlServer.Management.Upgrade
 
 		private bool AreDirectoriesIdentical(DirectoryInfo expectedDirectory, DirectoryInfo actualDirectory)
 		{
-			Console.WriteLine("Comparing generated database scripts to verify upgrade scripts succeeded.");
+			ConsoleWriteLine("Comparing generated database scripts to verify upgrade scripts succeeded.");
 			// Compare the files in the directories and convert to a lookup on status.
 			var filesByStatus = DirectoryComparer.Compare(expectedDirectory.FullName, actualDirectory.FullName)
 				.ToLookup(f => f.Status);
 			bool allIdentical = filesByStatus.All(group => group.Key == FileCompareStatus.Identical);
 			if(!allIdentical)
 			{
-				try
-				{
-					Console.ForegroundColor = ConsoleColor.Red;
-					Console.Error.WriteLine("\r\nThe upgraded target database does not match the source database.");
-					ShowFiles(filesByStatus[FileCompareStatus.SourceOnly], "\r\nMissing (should have been added):");
-					ShowFiles(filesByStatus[FileCompareStatus.Modified], "\r\nDifferent (should be identical):");
-					ShowFiles(filesByStatus[FileCompareStatus.TargetOnly], "\r\nExtra (should have been removed):");
-					Console.ResetColor();
-					Console.WriteLine("\r\nTo review file level differences, use a tool such as WinMerge to compare these directories:");
-					Console.WriteLine("\t{0}", expectedDirectory.FullName);
-					Console.WriteLine("\t{0}", actualDirectory.FullName);
-				}
-				finally
-				{
-					Console.ResetColor();
-				}
+				ErrorWriteLine("\r\nThe upgraded target database does not match the source database.");
+				ShowFiles(filesByStatus[FileCompareStatus.SourceOnly], "\r\nMissing (should have been added):");
+				ShowFiles(filesByStatus[FileCompareStatus.Modified], "\r\nDifferent (should be identical):");
+				ShowFiles(filesByStatus[FileCompareStatus.TargetOnly], "\r\nExtra (should have been removed):");
+				ConsoleWriteLine("\r\nTo review file level differences, use a tool such as WinMerge to compare these directories:");
+				ConsoleWriteLine("\t{0}", expectedDirectory.FullName);
+				ConsoleWriteLine("\t{0}", actualDirectory.FullName);
 			}
 			return allIdentical;
 		}
 
+		private void ConsoleWriteLine()
+		{
+			lock(consoleLock)
+			{
+				Console.WriteLine();
+			}
+		}
+
+		private void ConsoleWriteLine(string value)
+		{
+			lock(consoleLock)
+			{
+				Console.WriteLine(value);
+			}
+		}
+
+		private void ConsoleWriteLine(string format, params object[] arg)
+		{
+			lock(consoleLock)
+			{
+				Console.WriteLine(format, arg);
+			}
+		}
+
+		private void ConsoleWriteLine(ConsoleColor color, string format, params object[] arg)
+		{
+			lock(consoleLock)
+			{
+				Console.ForegroundColor = color;
+				Console.WriteLine(format, arg);
+				Console.ResetColor();
+			}
+		}
+
+		private void ConsoleWriteLine(ConsoleColor color, string value)
+		{
+			lock(consoleLock)
+			{
+				Console.ForegroundColor = color;
+				Console.WriteLine(value);
+				Console.ResetColor();
+			}
+		}
+
 		private void CreateDatabase(string serverName, string databaseName, string scriptDirectory)
 		{
-			Console.WriteLine("Creating database '{0}' on server '{1}'.", databaseName, serverName);
+			ConsoleWriteLine("Creating database '{0}' on server '{1}'.", databaseName, serverName);
 			FileInfo scriptFile = new FileInfo(Path.Combine(scriptDirectory, "CreateDatabaseObjects.sql"));
 			FileInfo logFile = new FileInfo(Path.Combine(OutputDirectory, "Log", GetSafeFileName(databaseName) + ".txt"));
 
@@ -319,16 +353,14 @@ namespace Mercent.SqlServer.Management.Upgrade
 					databaseName,
 					logFile.FullName
 				);
-				Console.ForegroundColor = ConsoleColor.Red;
-				Console.Error.WriteLine();
-				Console.Error.WriteLine(message);
-				Console.ResetColor();
+				ErrorWriteLine();
+				ErrorWriteLine(message);
 				throw new AbortException(message);
 			}
 			else if(stopwatch.ElapsedMilliseconds > 1000)
 			{
 				// If the script took more than 1 second, output the elapsed time.
-				Console.WriteLine("Finished creating database {0} ({1} elapsed).", databaseName, stopwatch.Elapsed.ToString(elapsedTimeFormat));
+				ConsoleWriteLine("Finished creating database {0} ({1} elapsed).", databaseName, stopwatch.Elapsed.ToString(elapsedTimeFormat));
 			}
 		}
 
@@ -381,7 +413,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			bool hasDataChanges;
 			var stopwatch = Stopwatch.StartNew();
 
-			Console.WriteLine("Comparing data and generating {0} script.", dataUpgradeFile.Name);
+			ConsoleWriteLine("Comparing data and generating {0} script.", dataUpgradeFile.Name);
 
 			DataUpgradeScripter dataUpgradeScripter = new DataUpgradeScripter
 			{
@@ -403,7 +435,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			// Otherwise, delete the file.
 			if(hasDataChanges)
 			{
-				Console.WriteLine
+				ConsoleWriteLine
 				(
 					"Finished comparing data and generating {0} script ({1} elapsed).",
 					dataUpgradeFile.Name,
@@ -413,29 +445,67 @@ namespace Mercent.SqlServer.Management.Upgrade
 			}
 			else
 			{
-				Console.WriteLine("No data changes detected ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
+				ConsoleWriteLine("No data changes detected ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 				dataUpgradeFile.Delete();
 			}
 			return hasDataChanges;
 		}
 
+		private void ErrorWriteLine()
+		{
+			lock(consoleLock)
+			{
+				Console.Error.WriteLine();
+			}
+		}
+
+		private void ErrorWriteLine(string value)
+		{
+			ErrorWriteLine(ConsoleColor.Red, value);
+		}
+
+		private void ErrorWriteLine(ConsoleColor color, string value)
+		{
+			lock(consoleLock)
+			{
+				Console.ForegroundColor = color;
+				Console.Error.WriteLine(value);
+				Console.ResetColor();
+			}
+		}
+
+		private void ErrorWriteLine(string format, params object[] arg)
+		{
+			ErrorWriteLine(ConsoleColor.Red, format, arg);
+		}
+
+		private void ErrorWriteLine(ConsoleColor color, string format, params object[] arg)
+		{
+			lock(consoleLock)
+			{
+				Console.ForegroundColor = color;
+				Console.Error.WriteLine(format, arg);
+				Console.ResetColor();
+			}
+		}
+
 		private DacPackage ExtractSource(SchemaUpgradeScripter scripter, FileInfo packageFile)
 		{
 			var stopwatch = Stopwatch.StartNew();
-			Console.WriteLine("Extracting the source package.");
+			ConsoleWriteLine("Extracting the source package.");
 			var package = scripter.ExtractSource(packageFile);
 			stopwatch.Stop();
-			Console.WriteLine("Finished extracting the source package ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
+			ConsoleWriteLine("Finished extracting the source package ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 			return package;
 		}
 
 		private DacPackage ExtractTarget(SchemaUpgradeScripter scripter, FileInfo packageFile)
 		{
 			var stopwatch = Stopwatch.StartNew();
-			Console.WriteLine("Extracting the target package.");
+			ConsoleWriteLine("Extracting the target package.");
 			var package = scripter.ExtractTarget(packageFile);
 			stopwatch.Stop();
-			Console.WriteLine("Finished extracting the target package ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
+			ConsoleWriteLine("Finished extracting the target package ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 			return package;
 		}
 
@@ -455,8 +525,20 @@ namespace Mercent.SqlServer.Management.Upgrade
 				OutputDirectory = outputDirectory.FullName
 			};
 			// Delete the directory if it already exists.
-			if(Directory.Exists(fileScripter.OutputDirectory))
-				Directory.Delete(fileScripter.OutputDirectory, true);
+			while(Directory.Exists(fileScripter.OutputDirectory))
+			{
+				try
+				{
+					Directory.Delete(fileScripter.OutputDirectory, true);
+				}
+				catch(Exception ex)
+				{
+					string message = String.Format("Failed to delete the directory {0}\r\n{1}", fileScripter.OutputDirectory, ex.Message);
+					ErrorWriteLine(message);
+					if(!PromptRetry())
+						throw new AbortException(message, ex);
+				}
+			}
 
 			string logFileName = outputDirectory.Name + ".txt";
 			FileInfo logFile = new FileInfo(Path.Combine(this.OutputDirectory, "Log", logFileName));
@@ -474,10 +556,10 @@ namespace Mercent.SqlServer.Management.Upgrade
 						// This will hopefully give us context for the error message.
 						if(lastProgressMessage != null)
 						{
-							Console.WriteLine(lastProgressMessage);
+							ConsoleWriteLine(lastProgressMessage);
 							lastProgressMessage = null;
 						}
-						Console.Error.WriteLine(e.Message);
+						ErrorWriteLine(e.Message);
 					}
 				};
 				fileScripter.OutputMessageReceived += (s, e) =>
@@ -501,6 +583,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 		private void GenerateSchemaUpgradeReport(SchemaUpgradeScripter schemaUpgradeScripter, FileInfo reportFile)
 		{
 			string report = schemaUpgradeScripter.GenerateReport();
+			reportFile.Directory.Create();
 			XmlReaderSettings readerSettings = new XmlReaderSettings { IgnoreWhitespace = true };
 			XmlWriterSettings writerSettings = new XmlWriterSettings { Indent = true, IndentChars = "\t" };
 			using(XmlReader reader = XmlReader.Create(new StringReader(report), readerSettings))
@@ -516,20 +599,20 @@ namespace Mercent.SqlServer.Management.Upgrade
 		private DirectoryInfo GenerateSourceCreateScripts(DirectoryInfo directory)
 		{
 			var stopwatch = Stopwatch.StartNew();
-			Console.WriteLine("Generating clean scripts from source database (for verification).");
+			ConsoleWriteLine("Generating clean scripts from source database (for verification).");
 			GenerateCreateScripts(SourceServerName, SourceDatabaseName, directory);
 			stopwatch.Stop();
-			Console.WriteLine("Finished generating scripts from source database ({0}).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
+			ConsoleWriteLine("Finished generating scripts from source database ({0}).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 			return directory;
 		}
 
 		private DirectoryInfo GenerateTargetCreateScripts(DirectoryInfo directory)
 		{
 			var stopwatch = Stopwatch.StartNew();
-			Console.WriteLine("Generating scripts from upgraded target database (for verification).");
+			ConsoleWriteLine("Generating scripts from upgraded target database (for verification).");
 			GenerateCreateScripts(TargetServerName, TargetDatabaseName, directory);
 			stopwatch.Stop();
-			Console.WriteLine("Finished generating scripts from upgraded target database ({0}).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
+			ConsoleWriteLine("Finished generating scripts from upgraded target database ({0}).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 			return directory;
 		}
 
@@ -566,54 +649,35 @@ namespace Mercent.SqlServer.Management.Upgrade
 				.ToList();
 			if(dataIssues.Any())
 			{
-				Console.ForegroundColor = ConsoleColor.White;
-				Console.WriteLine("\r\nReview issues for potential data loss:");
-				Console.ForegroundColor = ConsoleColor.Yellow;
-				try
+				ConsoleWriteLine(ConsoleColor.White, "\r\nReview issues for potential data loss:");
+				foreach(var issue in dataIssues)
 				{
-					foreach(var issue in dataIssues)
-					{
-						Console.WriteLine("\t{0}", (string)issue.Attribute("Value"));
-					}
-				}
-				finally
-				{
-					Console.ResetColor();
+					ConsoleWriteLine(ConsoleColor.Yellow, "\t{0}", (string)issue.Attribute("Value"));
 				}
 			}
 		}
 
 		private void OutputSummaryMessage(bool upgradedTargetMatchesSource, TimeSpan elapsed)
 		{
-			Console.WriteLine();
-			try
+			ConsoleWriteLine();
+			if(hasUpgradeScriptError)
 			{
-				if(hasUpgradeScriptError)
+				ErrorWriteLine("Upgrade scripts failed to execute. Review the scripts that failed and add or correct manual steps in a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
+			}
+			else if(upgradedTargetMatchesSource)
+			{
+				if(hasUpgradeScript)
 				{
-					Console.ForegroundColor = ConsoleColor.Red;
-					Console.Error.Write("Upgrade scripts failed to execute. Review the scripts that failed and add or correct manual steps in a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
-				}
-				else if(upgradedTargetMatchesSource)
-				{
-					Console.ForegroundColor = ConsoleColor.White;
-					if(hasUpgradeScript)
-					{
-						Console.Write("Upgrade scripts successfully generated and verified.");
-					}
-					else
-						Console.Write("No upgrade necessary.");
+					ConsoleWriteLine(ConsoleColor.White, "Upgrade scripts successfully generated and verified.");
 				}
 				else
-				{
-					Console.ForegroundColor = ConsoleColor.Red;
-					Console.Error.Write("Upgrade scripts failed verification. Review the files that failed verification and add manual steps to a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
-				}
-				Console.WriteLine(" ({0} total elapsed)", elapsed.ToString(elapsedTimeFormat));
+					ConsoleWriteLine(ConsoleColor.White, "No upgrade necessary.");
 			}
-			finally
+			else
 			{
-				Console.ResetColor();
+				ErrorWriteLine("Upgrade scripts failed verification. Review the files that failed verification and add manual steps to a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
 			}
+			ConsoleWriteLine("({0} total elapsed)", elapsed.ToString(elapsedTimeFormat));
 		}
 
 		/// <summary>
@@ -627,25 +691,63 @@ namespace Mercent.SqlServer.Management.Upgrade
 		/// </returns>
 		private bool PromptContinue()
 		{
-			// Clear any keys pressed before the prompt was displayed.
-			// Use a for loop instead of a while loop to avoid any chance of an infinite loop.
-			for(int i = 0; i < 1000 && Console.KeyAvailable; i++)
-				Console.Read();
-			while(true)
+			bool response = PromptYesNo("Continue (y/n)? ");
+			if(response)
+				ConsoleWriteLine("\r\nContinuing...");
+			else
+				ConsoleWriteLine("\r\nAborting...");
+			return response;
+		}
+
+		/// <summary>
+		/// Prompts the user whether to retry (y/n).
+		/// </summary>
+		/// <remarks>
+		/// This method continues prompting until the user presses y, Y, n, or N.
+		/// </remarks>
+		/// <returns>
+		/// true if the user presses 'y'; false if the user presses 'n'
+		/// </returns>
+		private bool PromptRetry()
+		{
+			bool response = PromptYesNo("Retry (y/n)? ");
+			if(response)
+				ConsoleWriteLine("\r\nRetrying...");
+			else
+				ConsoleWriteLine("\r\nAborting...");
+			return response;
+		}
+
+		/// <summary>
+		/// Prompts the user with a yes/no question.
+		/// </summary>
+		/// <remarks>
+		/// This method continues prompting until the user presses y, Y, n, or N.
+		/// </remarks>
+		/// <returns>
+		/// true if the user presses 'y'; false if the user presses 'n'
+		/// </returns>
+		private bool PromptYesNo(string prompt)
+		{
+			// Since there are parallel tasks, ensure that we only prompt
+			// the user for on parallel task at a time.
+			lock(consoleLock)
 			{
-				Console.Write("Continue (y/n)? ");
-				ConsoleKeyInfo key = Console.ReadKey();
-				char ch = key.KeyChar;
-				if(ch == 'y' || ch == 'Y')
+				// Clear any keys pressed before the prompt was displayed.
+				// Use a for loop instead of a while loop to avoid any chance of an infinite loop.
+				for(int i = 0; i < 1000 && Console.KeyAvailable; i++)
+					Console.Read();
+				while(true)
 				{
-					Console.WriteLine("\r\nContinuing...");
-					return true;
+					Console.Write(prompt);
+					ConsoleKeyInfo key = Console.ReadKey();
+					char ch = key.KeyChar;
+					if(ch == 'y' || ch == 'Y')
+						return true;
+					else if(ch == 'n' || ch == 'N')
+						return false;
 				}
-				else if(ch == 'n' || ch == 'N')
-				{
-					Console.WriteLine("\r\nAborting...");
-					return false;
-				}
+				Console.WriteLine();
 			}
 		}
 
@@ -654,13 +756,12 @@ namespace Mercent.SqlServer.Management.Upgrade
 			var scriptFiles = AddAndExecuteFiles(writer, "SchemaPrep*.sql");
 			return scriptFiles.Any();
 		}
-
 		private bool SchemaUpgrade(TextWriter upgradeWriter, SchemaUpgradeScripter schemaUpgradeScripter, FileInfo schemaUpgradeFile, FileInfo schemaUpgradeReportFile, bool dropObjectsNotInSource)
 		{
 			bool hasSchemaChanges;
 			var stopwatch = Stopwatch.StartNew();
 
-			Console.WriteLine("Comparing schema and generating {0} script.", schemaUpgradeFile.Name);
+			ConsoleWriteLine("Comparing schema and generating {0} script.", schemaUpgradeFile.Name);
 
 			// Generate the schema upgrade report in parallel.
 			Task generateSchemaUpgradeReportTask = Task.Run(() => GenerateSchemaUpgradeReport(schemaUpgradeScripter, schemaUpgradeReportFile));
@@ -679,7 +780,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			// Otherwise, delete the file.
 			if(hasSchemaChanges)
 			{
-				Console.WriteLine
+				ConsoleWriteLine
 				(
 					@"Finished comparing schema and generating {0} script. ({1} elapsed).",
 					schemaUpgradeFile.Name,
@@ -689,7 +790,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			}
 			else
 			{
-				Console.WriteLine("No schema changes detected ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
+				ConsoleWriteLine("No schema changes detected ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 				schemaUpgradeFile.Delete();
 			}
 			return hasSchemaChanges;
@@ -700,7 +801,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			bool hasFinalSchemaChanges;
 			var stopwatch = Stopwatch.StartNew();
 
-			Console.WriteLine("Checking for final schema changes and generating {0} script.", schemaFinalFile.Name);
+			ConsoleWriteLine("Checking for final schema changes and generating {0} script.", schemaFinalFile.Name);
 
 			// Don't use the TargetPackage because the database has been modified by other scripts.
 			// The SchemaUpgradeScripter will compare directly against the target database instead of the target package.
@@ -718,7 +819,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			// Otherwise, delete the file.
 			if(hasFinalSchemaChanges)
 			{
-				Console.WriteLine
+				ConsoleWriteLine
 				(
 					@"Finished checking for final schema changes and generating {0} script ({1} elapsed).",
 					schemaFinalFile.Name,
@@ -728,7 +829,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			}
 			else
 			{
-				Console.WriteLine("No final schema changes detected ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
+				ConsoleWriteLine("No final schema changes detected ({0} elapsed).", stopwatch.Elapsed.ToString(elapsedTimeFormat));
 				schemaFinalFile.Delete();
 			}
 			return hasFinalSchemaChanges;
@@ -738,12 +839,10 @@ namespace Mercent.SqlServer.Management.Upgrade
 		{
 			if(files.Any())
 			{
-				Console.ForegroundColor = ConsoleColor.Gray;
-				Console.Error.WriteLine(message);
-				Console.ForegroundColor = ConsoleColor.Yellow;
+				ErrorWriteLine(ConsoleColor.Gray, message);
 				foreach(var file in files)
 				{
-					Console.Error.WriteLine("\t{0}", file.RelativePath);
+					ErrorWriteLine(ConsoleColor.Yellow, "\t{0}", file.RelativePath);
 				}
 			}
 		}
