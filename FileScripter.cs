@@ -1406,33 +1406,35 @@ namespace Mercent.SqlServer.Management
 			OnProgressMessageReceived(relativeDataFile);
 
 			// Run bcp to create the format file.
-			// bcp [database].[schema].[table] format nul -S servername -T -w -f formatFile -x
+			// bcp "[schema].[table]" format nul -S servername -d database -T -w -f formatFile -x
 			string bcpArguments = String.Format
 			(
-				"\"{0}.{1}.{2}\" format nul -S {3} -T -w -f \"{4}\" -x",
-				MakeSqlBracket(this.DatabaseName),
+				"\"{0}.{1}\" format nul -S \"{2}\" -d \"{3}\" -T -w -f \"{4}\" -x",
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
 				this.ServerName,
+				this.DatabaseName,
 				formatFile
 			);
 
 			RunBcp(bcpArguments);
 
 			// Modify the format file so that the data file will be formatted how we want it to be.
-			ModifyOutUtf16BcpFormatFile(formatFile);
+			IEnumerable<Column> columns = GetBulkCopyColumns(table);
+			ModifyOutUtf16BcpFormatFile(formatFile, columns);
 
 			// Run bcp to create the data file.
-			// bcp "SELECT CONVERT(nvarchar(2), null), * FROM [database].[schema].[table]" queryout tmpDataFile -S servername -T -f formatFile
+			// bcp "SELECT CONVERT(nvarchar(2), null), <columns> FROM [schema].[table] <order by clause>" queryout tmpDataFile -S servername -d database -T -f formatFile
 			bcpArguments = String.Format
 			(
-				"\"SELECT CONVERT(nvarchar(2), null), * FROM {0}.{1}.{2} {3}\" queryout \"{4}\" -S {5} -T -f \"{6}\"",
-				MakeSqlBracket(this.DatabaseName),
+				"\"SELECT CONVERT(nvarchar(2), null), {0} FROM {1}.{2} {3}\" queryout \"{4}\" -S \"{5}\" -d \"{6}\" -T -f \"{8}\"",
+				GetBulkCopySelectString(columns),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
 				GetOrderByClauseForTable(table),
 				tmpDataFile,
 				this.ServerName,
+				this.DatabaseName,
 				formatFile
 			);
 
@@ -1468,16 +1470,16 @@ namespace Mercent.SqlServer.Management
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
 			OnProgressMessageReceived(relativeDataFile);
-			
+
 			// Run bcp to create the format file.
-			// bcp [database].[schema].[table] format nul -S servername -T -c -C codePage -f formatFile -x
+			// bcp "[schema].[table]" format nul -S servername -d database -T -c -C codePage -f formatFile -x
 			string bcpArguments = String.Format
 			(
-				"\"{0}.{1}.{2}\" format nul -S {3} -T -c -C {4} -f \"{5}\" -x",
-				MakeSqlBracket(this.DatabaseName),
+				"\"{0}.{1}\" format nul -S \"{2}\" -d \"{3}\" -T -c -C {4} -f \"{5}\" -x",
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
 				this.ServerName,
+				this.DatabaseName,
 				codePage,
 				formatFile
 			);
@@ -1485,19 +1487,21 @@ namespace Mercent.SqlServer.Management
 			RunBcp(bcpArguments);
 
 			// Modify the format file so that the data file will be formatted how we want it to be.
-			ModifyOutCodePageBcpFormatFile(formatFile);
+			IEnumerable<Column> columns = GetBulkCopyColumns(table);
+			ModifyOutCodePageBcpFormatFile(formatFile, columns);
 
 			// Run bcp to create the data file.
-			// bcp "SELECT CONVERT(nvarchar(2), null), * FROM [database].[schema].[table]" queryout tmpDataFile -S servername -T -C codePage -f formatFile
+			// bcp "SELECT CONVERT(nvarchar(2), null), <columns> FROM [schema].[table] <order by clause>" queryout dataFile -S servername -d database -T -C codePage -f formatFile
 			bcpArguments = String.Format
 			(
-				"\"SELECT CONVERT(nvarchar(2), null), * FROM {0}.{1}.{2} {3}\" queryout \"{4}\" -S {5} -T -C {6} -f \"{7}\"",
-				MakeSqlBracket(this.DatabaseName),
+				"\"SELECT CONVERT(nvarchar(2), null), {0} FROM {1}.{2} {3}\" queryout \"{4}\" -S \"{5}\" -d \"{6}\" -T -C {7} -f \"{8}\"",
+				GetBulkCopySelectString(columns),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
 				GetOrderByClauseForTable(table),
 				dataFile,
 				this.ServerName,
+				this.DatabaseName,
 				codePage,
 				formatFile
 			);
@@ -1531,14 +1535,14 @@ namespace Mercent.SqlServer.Management
 			OnProgressMessageReceived(relativeDataFile);
 
 			// Run bcp to create the format file.
-			// bcp [database].[schema].[table] format nul -S servername -T -c -C codePage -f formatFile -x
+			// bcp "[schema].[table]" format nul -S servername -d database -T -c -C codePage -f formatFile -x
 			string bcpArguments = String.Format
 			(
-				"\"{0}.{1}.{2}\" format nul -S {3} -T -c -C {4} -f \"{5}\" -x",
-				MakeSqlBracket(this.DatabaseName),
+				"\"{0}.{1}\" format nul -S \"{2}\" -d \"{3}\" -T -c -C {4} -f \"{5}\" -x",
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
 				this.ServerName,
+				this.DatabaseName,
 				codePage,
 				formatFile
 			);
@@ -1546,19 +1550,21 @@ namespace Mercent.SqlServer.Management
 			RunBcp(bcpArguments);
 
 			// Modify the format file so that the data file will be formatted how we want it to be.
-			ModifyOutCompactCodePageBcpFormatFile(formatFile);
+			IEnumerable<Column> columns = GetBulkCopyColumns(table);
+			ModifyOutCompactCodePageBcpFormatFile(formatFile, columns);
 
 			// Run bcp to create the data file.
-			// bcp "SELECT CONVERT(nvarchar(2), null), * FROM [database].[schema].[table]" queryout tmpDataFile -S servername -T -C codePage -f formatFile
+			// bcp "SELECT CONVERT(nvarchar(2), null), <columns> FROM [schema].[table] <order by clause>" queryout dataFile -S servername -d database -T -C codePage -f formatFile
 			bcpArguments = String.Format
 			(
-				"\"SELECT CONVERT(nvarchar(2), null), * FROM {0}.{1}.{2} {3}\" queryout \"{4}\" -S {5} -T -C {6} -f \"{7}\"",
-				MakeSqlBracket(this.DatabaseName),
+				"\"SELECT CONVERT(nvarchar(2), null), {0} FROM {1}.{2} {3}\" queryout \"{4}\" -S \"{5}\" -d \"{6}\" -T -C {7} -f \"{8}\"",
+				GetBulkCopySelectString(columns),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
 				GetOrderByClauseForTable(table),
 				dataFile,
 				this.ServerName,
+				this.DatabaseName,
 				codePage,
 				formatFile
 			);
@@ -1567,6 +1573,21 @@ namespace Mercent.SqlServer.Management
 
 			// Modify the format file so that it can be used by bcp to load data into the database.
 			ModifyInCodePageBcpFormatFile(formatFile);
+		}
+
+		private IEnumerable<Column> GetBulkCopyColumns(Table table)
+		{
+			return table.Columns
+				.Cast<Column>()
+				.Where
+				(
+					c => !(c.Computed || GetBaseSqlDataType(c.DataType) == SqlDataType.Timestamp)
+				);
+		}
+
+		private string GetBulkCopySelectString(IEnumerable<Column> columns)
+		{
+			return String.Join(", ", columns.Select(c => MakeSqlBracket(c.Name)));
 		}
 
 		/// <summary>
@@ -1610,11 +1631,85 @@ namespace Mercent.SqlServer.Management
 		/// This method adds an extra "padding" column so that the terminator of this column will look
 		/// like the label for the first column.
 		/// </remarks>
-		private void ModifyOutUtf16BcpFormatFile(string formatFile)
+		private void ModifyOutUtf16BcpFormatFile(string formatFile, IEnumerable<Column> bulkCopyColumns)
+		{
+			ModifyOutBcpFormatFile
+			(
+				formatFile,
+				bulkCopyColumns,
+				name => EscapeUtf16BcpTerminator(@"{\r\n\t" + name + @": "),
+				name => EscapeUtf16BcpTerminator(@",\r\n\t" + name + @": "),
+				EscapeUtf16BcpTerminator(@"\r\n}\r\n")
+			);
+		}
+
+		/// <summary>
+		/// Modifies a bcp format file to output a data file with a format similar to JSON.
+		/// </summary>
+		/// <remarks>
+		/// This format is designed to be source-control friendly for diff and merge operations.
+		/// Note that the occurences of "\r" and "\n" in the terminator actually do contain
+		/// backslashes that should show up in the XML format file as backslashes.
+		/// This method adds an extra "padding" column so that the terminator of this column will look
+		/// like the label for the first column.
+		/// </remarks>
+		private void ModifyOutCodePageBcpFormatFile(string formatFile, IEnumerable<Column> bulkCopyColumns)
+		{
+			ModifyOutBcpFormatFile
+			(
+				formatFile,
+				bulkCopyColumns,
+				name => @"{\r\n\t" + name + @": ",
+				name => @",\r\n\t" + name + @": ",
+				@"\r\n}\r\n"
+			);
+		}
+
+		/// <summary>
+		/// Modifies a bcp format file to output a data file with a format similar to JSON.
+		/// </summary>
+		/// <remarks>
+		/// This format is designed to be source-control friendly for diff and merge operations.
+		/// Note that the occurences of "\r" and "\n" in the terminator actually do contain
+		/// backslashes that should show up in the XML format file as backslashes.
+		/// This method adds an extra "padding" column so that the terminator of this column will look
+		/// like the label for the first column.
+		/// </remarks>
+		private void ModifyOutCompactCodePageBcpFormatFile(string formatFile, IEnumerable<Column> bulkCopyColumns)
+		{
+			ModifyOutBcpFormatFile
+			(
+				formatFile,
+				bulkCopyColumns,
+				name => "«",
+				name => "»,«",
+				@"»;\r\n"
+			);
+		}
+
+		/// <summary>
+		/// Modifies a bcp format file to output a data file with a format similar custom terminators.
+		/// </summary>
+		/// <param name="formatFile"></param>
+		/// <param name="bulkCopyColumns"></param>
+		/// <param name="firstTerminatorSelector">Function that returns the terminator for the first column from the column name.</param>
+		/// <param name="innerTerminatorSelector">Function that returns the terminator for an inner column from the column name.</param>
+		/// <param name="rowTerminator">Terminator to use for the row (the last column).</param>
+		private void ModifyOutBcpFormatFile
+		(
+			string formatFile,
+			IEnumerable<Column> bulkCopyColumns,
+			Func<string, string> firstTerminatorSelector,
+			Func<string, string> innerTerminatorSelector,
+			string rowTerminator
+		)
 		{
 			XElement formatElement = XElement.Load(formatFile);
 			XNamespace ns = "http://schemas.microsoft.com/sqlserver/2004/bulkload/format";
 			XNamespace xsi = "http://www.w3.org/2001/XMLSchema-instance";
+
+			// Create a hash set of the columns to be included.
+			HashSet<string> includedColumns = new HashSet<string>(bulkCopyColumns.Select(c => c.Name));
 
 			// The format file has a "RECORD" that contains "FIELD" elements that describe the
 			// format of data field in the data file.
@@ -1624,15 +1719,64 @@ namespace Mercent.SqlServer.Management
 			// schema of the rows in SQL (name and SQL data type).
 			XElement row = formatElement.Element(ns + "ROW");
 
-			string firstColumnName = (string)row.Element(ns + "COLUMN").Attribute("NAME");
+			// Get an array of the fields.
+			var fields = record.Elements(ns + "FIELD").ToList();
+
+			// Get an array of the columns.
+			var columns = row.Elements(ns + "COLUMN").ToList();
+
+			// We will reset the IDs of the fields since some of them
+			// may not be included in the modified format file.
+			// We'll start at the end and work in reverse order.
+			int id = includedColumns.Count;
+
+			// Use this terminator for the last included column
+			// (the first one to be processed in reverse order).
+			string terminator = @"\r\n}\r\n";
+
+			// Loop through all the fields/columns in reverse order.
+			for(int index = fields.Count - 1; index >= 0; index--)
+			{
+				var field = fields[index];
+				var column = columns[index];
+				string columnName = (string)column.Attribute("NAME");
+
+				if(includedColumns.Contains(columnName))
+				{
+					// Update the ID and TERMINATOR and of the field.
+					field.SetAttributeValue("ID", id);
+					field.SetAttributeValue("TERMINATOR", terminator);
+
+					// Update the SOURCE of the column.
+					column.SetAttributeValue("SOURCE", id);
+
+					// Decrement the id (since we are iterating in reverse order).
+					id--;
+
+					// Use this column's name in the terminator for the next column
+					// ("next" in reverse, so really the preceeding column).
+					terminator = innerTerminatorSelector(columnName);
+				}
+				else
+				{
+					// Remove the field and column from the lists and from the XML
+					// since it was not in the set of included columns.
+					fields.RemoveAt(index);
+					columns.RemoveAt(index);
+					field.Remove();
+					column.Remove();
+				}
+			}
+
+			string firstColumnName = (string)columns[0].Attribute("NAME");
 
 			// Add a blank padding field to the start of the record.
 			XElement paddingField = new XElement
 			(
 				ns + "FIELD",
 				new XAttribute("ID", 0),
-				new XAttribute(xsi + "type", "NCharTerm"),
-				new XAttribute("TERMINATOR", @"{\0\r\0\n\0\t\0" + EscapeUtf16BcpTerminator(firstColumnName) + @":\0 \0"),
+				new XAttribute(xsi + "type", "CharTerm"),
+				new XAttribute("TERMINATOR", firstTerminatorSelector(firstColumnName)),
 				new XAttribute("MAX_LENGTH", 2)
 			);
 			record.AddFirst(paddingField);
@@ -1646,25 +1790,6 @@ namespace Mercent.SqlServer.Management
 				new XAttribute(xsi + "type", "SQLVARYCHAR")
 			);
 			row.AddFirst(paddingColumn);
-
-			// Get an array of the fields.
-			var fields = record.Elements(ns + "FIELD").ToArray();
-
-			// Get an array of the columns.
-			var columns = row.Elements(ns + "COLUMN").ToArray();
-
-			// Loop through all the fields/columns except the first and last one.
-			for(int index = 1; index < fields.Length - 1; index++)
-			{
-				var field = fields[index];
-				var column = columns[index + 1];
-				string columnName = (string)column.Attribute("NAME");
-				string terminator = @",\0\r\0\n\0\t\0" + EscapeUtf16BcpTerminator(columnName) + @":\0 \0";
-				field.SetAttributeValue("TERMINATOR", terminator);
-			}
-
-			// Set the terminator for the last field.
-			fields.Last().SetAttributeValue("TERMINATOR", @"\r\0\n\0}\0\r\0\n\0");
 
 			// Overwrite the format file.
 			formatElement.Save(formatFile);
@@ -1681,146 +1806,6 @@ namespace Mercent.SqlServer.Management
 		{
 			// There is currently no difference in behavior for modifying the Utf16 vs CodePage format file.
 			ModifyInCodePageBcpFormatFile(formatFile);
-		}
-
-		/// <summary>
-		/// Modifies a bcp format file to output a data file with a format similar to JSON.
-		/// </summary>
-		/// <remarks>
-		/// This format is designed to be source-control friendly for diff and merge operations.
-		/// Note that the occurences of "\r" and "\n" in the terminator actually do contain
-		/// backslashes that should show up in the XML format file as backslashes.
-		/// This method adds an extra "padding" column so that the terminator of this column will look
-		/// like the label for the first column.
-		/// </remarks>
-		private void ModifyOutCodePageBcpFormatFile(string formatFile)
-		{
-			XElement formatElement = XElement.Load(formatFile);
-			XNamespace ns = "http://schemas.microsoft.com/sqlserver/2004/bulkload/format";
-			XNamespace xsi = "http://www.w3.org/2001/XMLSchema-instance";
-
-			// The format file has a "RECORD" that contains "FIELD" elements that describe the
-			// format of data field in the data file.
-			XElement record = formatElement.Element(ns + "RECORD");
-
-			// The format file also has a "ROW" that contains "COLUMN" elements that describe the
-			// schema of the rows in SQL (name and SQL data type).
-			XElement row = formatElement.Element(ns + "ROW");
-
-			string firstColumnName = (string)row.Element(ns + "COLUMN").Attribute("NAME");
-
-			// Add a blank padding field to the start of the record.
-			XElement paddingField = new XElement
-			(
-				ns + "FIELD",
-				new XAttribute("ID", 0),
-				new XAttribute(xsi + "type", "CharTerm"),
-				new XAttribute("TERMINATOR", @"{\r\n\t" + firstColumnName + @": "),
-				new XAttribute("MAX_LENGTH", 2)
-			);
-			record.AddFirst(paddingField);
-
-			// Add a blank padding column to the start of the row.
-			XElement paddingColumn = new XElement
-			(
-				ns + "COLUMN",
-				new XAttribute("SOURCE", 0),
-				new XAttribute("NAME", "__Padding__"),
-				new XAttribute(xsi + "type", "SQLVARYCHAR")
-			);
-			row.AddFirst(paddingColumn);
-
-			// Get an array of the fields.
-			var fields = record.Elements(ns + "FIELD").ToArray();
-
-			// Get an array of the columns.
-			var columns = row.Elements(ns + "COLUMN").ToArray();
-
-			// Loop through all the fields/columns except the first and last one.
-			for(int index = 1; index < fields.Length - 1; index++)
-			{
-				var field = fields[index];
-				var column = columns[index + 1];
-				string columnName = (string)column.Attribute("NAME");
-				string terminator = @",\r\n\t" + columnName + @": ";
-				field.SetAttributeValue("TERMINATOR", terminator);
-			}
-
-			// Set the terminator for the last field.
-			fields.Last().SetAttributeValue("TERMINATOR", @"\r\n}\r\n");
-
-			// Overwrite the format file.
-			formatElement.Save(formatFile);
-		}
-
-		/// <summary>
-		/// Modifies a bcp format file to output a data file with a format similar to JSON.
-		/// </summary>
-		/// <remarks>
-		/// This format is designed to be source-control friendly for diff and merge operations.
-		/// Note that the occurences of "\r" and "\n" in the terminator actually do contain
-		/// backslashes that should show up in the XML format file as backslashes.
-		/// This method adds an extra "padding" column so that the terminator of this column will look
-		/// like the label for the first column.
-		/// </remarks>
-		private void ModifyOutCompactCodePageBcpFormatFile(string formatFile)
-		{
-			XElement formatElement = XElement.Load(formatFile);
-			XNamespace ns = "http://schemas.microsoft.com/sqlserver/2004/bulkload/format";
-			XNamespace xsi = "http://www.w3.org/2001/XMLSchema-instance";
-
-			// The format file has a "RECORD" that contains "FIELD" elements that describe the
-			// format of data field in the data file.
-			XElement record = formatElement.Element(ns + "RECORD");
-
-			// The format file also has a "ROW" that contains "COLUMN" elements that describe the
-			// schema of the rows in SQL (name and SQL data type).
-			XElement row = formatElement.Element(ns + "ROW");
-
-			string firstColumnName = (string)row.Element(ns + "COLUMN").Attribute("NAME");
-
-			// Add a blank padding field to the start of the record.
-			XElement paddingField = new XElement
-			(
-				ns + "FIELD",
-				new XAttribute("ID", 0),
-				new XAttribute(xsi + "type", "CharTerm"),
-				new XAttribute("TERMINATOR", "«"),
-				new XAttribute("MAX_LENGTH", 2)
-			);
-			record.AddFirst(paddingField);
-
-			// Add a blank padding column to the start of the row.
-			XElement paddingColumn = new XElement
-			(
-				ns + "COLUMN",
-				new XAttribute("SOURCE", 0),
-				new XAttribute("NAME", "__Padding__"),
-				new XAttribute(xsi + "type", "SQLVARYCHAR")
-			);
-			row.AddFirst(paddingColumn);
-
-			// Get an array of the fields.
-			var fields = record.Elements(ns + "FIELD").ToArray();
-
-			// Get an array of the columns.
-			var columns = row.Elements(ns + "COLUMN").ToArray();
-
-			// Loop through all the fields/columns except the first and last one.
-			for(int index = 1; index < fields.Length - 1; index++)
-			{
-				var field = fields[index];
-				var column = columns[index + 1];
-				string columnName = (string)column.Attribute("NAME");
-				string terminator = "»,«";
-				field.SetAttributeValue("TERMINATOR", terminator);
-			}
-
-			// Set the terminator for the last field.
-			fields.Last().SetAttributeValue("TERMINATOR", @"»;\r\n");
-
-			// Overwrite the format file.
-			formatElement.Save(formatFile);
 		}
 
 		/// <summary>
