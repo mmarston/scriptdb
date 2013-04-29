@@ -90,7 +90,7 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 			{
 				Server sourceServer = new Server(SourceServerName);
 				Server targetServer = new Server(TargetServerName);
-				this.sourceDatabase = sourceServer.Databases[TargetDatabaseName];
+				this.sourceDatabase = sourceServer.Databases[SourceDatabaseName];
 				this.targetDatabase = targetServer.Databases[TargetDatabaseName];
 				this.utility = new ScriptUtility(this.targetDatabase);
 
