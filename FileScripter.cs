@@ -1427,7 +1427,7 @@ namespace Mercent.SqlServer.Management
 			// bcp "SELECT CONVERT(nvarchar(2), null), <columns> FROM [schema].[table] <order by clause>" queryout tmpDataFile -S servername -d database -T -f formatFile
 			bcpArguments = String.Format
 			(
-				"\"SELECT CONVERT(nvarchar(2), null), {0} FROM {1}.{2} {3}\" queryout \"{4}\" -S \"{5}\" -d \"{6}\" -T -f \"{8}\"",
+				"\"SELECT CONVERT(nvarchar(2), null), {0} FROM {1}.{2} {3}\" queryout \"{4}\" -S \"{5}\" -d \"{6}\" -T -f \"{7}\"",
 				GetBulkCopySelectString(columns),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
@@ -1732,7 +1732,7 @@ namespace Mercent.SqlServer.Management
 
 			// Use this terminator for the last included column
 			// (the first one to be processed in reverse order).
-			string terminator = @"\r\n}\r\n";
+			string terminator = rowTerminator;
 
 			// Loop through all the fields/columns in reverse order.
 			for(int index = fields.Count - 1; index >= 0; index--)
