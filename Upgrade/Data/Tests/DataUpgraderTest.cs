@@ -95,7 +95,7 @@ GO
 @"PRINT 'Inserting 1 row(s) into [dbo].[CompositeKey].';
 GO
 INSERT INTO [dbo].[CompositeKey] ([Key1], [Key2], [Value])
-VALUES(1, 'A', 'one');
+VALUES (1, 'A', 'one');
 GO
 ";
 			ExecuteTest(script1, script2, expected);
@@ -158,7 +158,7 @@ GO
 PRINT 'Inserting 1 row(s) into [dbo].[TestTable1].';
 GO
 INSERT INTO [dbo].[TestTable1] ([ID], [Value])
-VALUES(3, 'B');
+VALUES (3, 'B');
 GO
 ";
 			ExecuteTest(script1, script2, expected);
@@ -255,7 +255,7 @@ GO
 SET IDENTITY_INSERT [dbo].[IdentityTable1] ON;
 GO
 INSERT INTO [dbo].[IdentityTable1] ([ID], [Value])
-VALUES(1, 'one');
+VALUES (1, 'one');
 GO
 SET IDENTITY_INSERT [dbo].[IdentityTable1] OFF;
 GO
@@ -320,7 +320,7 @@ GO
 SET IDENTITY_INSERT [dbo].[TestTable1] ON;
 GO
 INSERT INTO [dbo].[TestTable1] ([ID], [Value])
-VALUES(1, 'uno');
+VALUES (1, 'uno');
 GO
 SET IDENTITY_INSERT [dbo].[TestTable1] OFF;
 GO
@@ -337,7 +337,7 @@ GO
 @"PRINT 'Inserting 1 row(s) into [dbo].[TestTable1].';
 GO
 INSERT INTO [dbo].[TestTable1] ([ID], [Value])
-VALUES(1, NULL);
+VALUES (1, NULL);
 GO
 ";
 			ExecuteTest(script1, script2, expected);
@@ -366,7 +366,7 @@ GO
 @"PRINT 'Inserting 1 row(s) into [dbo].[TableN].';
 GO
 INSERT INTO [dbo].[TableN] ([NKey], [Value])
-VALUES(NULL, 'NULL');
+VALUES (NULL, 'NULL');
 GO
 ";
 			ExecuteTest(script1, script2, expected);
@@ -453,7 +453,7 @@ GO
 @"PRINT 'Inserting 1 row(s) into [dbo].[TestTable1].';
 GO
 INSERT INTO [dbo].[TestTable1] ([ID], [Value])
-VALUES(1, 'one');
+VALUES (1, 'one');
 GO
 ";
 			ExecuteTest(script1, script2, expected);
@@ -541,7 +541,7 @@ GO
 PRINT 'Inserting 1 row(s) into [dbo].[TestTable1].';
 GO
 INSERT INTO [dbo].[TestTable1] ([ID], [Value])
-VALUES(1, 'one');
+VALUES (1, 'one');
 GO
 PRINT 'Enabling triggers.';
 GO
@@ -560,7 +560,7 @@ GO
 @"PRINT 'Inserting 1 row(s) into [dbo].[TestTable1].';
 GO
 INSERT INTO [dbo].[TestTable1] ([ID], [Value])
-VALUES(1, 'one');
+VALUES (1, 'one');
 GO
 ";
 			var options = new DataUpgradeOptions { DisableTriggers = false };
@@ -624,7 +624,7 @@ GO
 SET IDENTITY_INSERT [dbo].[TestTable1] ON;
 GO
 INSERT INTO [dbo].[TestTable1] ([ID], [Value])
-VALUES(1, 'uno');
+VALUES (1, 'uno');
 GO
 SET IDENTITY_INSERT [dbo].[TestTable1] OFF;
 GO
@@ -731,7 +731,7 @@ GO
 SET IDENTITY_INSERT [dbo].[TestTable1] ON;
 GO
 INSERT INTO [dbo].[TestTable1] ([ID], [Value])
-VALUES(1, 'uno');
+VALUES (1, 'uno');
 GO
 SET IDENTITY_INSERT [dbo].[TestTable1] OFF;
 GO
@@ -809,7 +809,7 @@ GO
 @"PRINT 'Inserting 1 row(s) into [dbo].[VariantTable].';
 GO
 INSERT INTO [dbo].[VariantTable] ([ID], [Value])
-VALUES(1, CAST(CAST('one' AS [varchar](10)) COLLATE Latin1_General_CS_AS AS [sql_variant]));
+VALUES (1, CAST(CAST('one' AS [varchar](10)) COLLATE Latin1_General_CS_AS AS [sql_variant]));
 GO
 ";
 			ExecuteTest(script1, script2, expected);
@@ -1141,6 +1141,15 @@ END;";
 				}
 				else
 				{
+					// We don't require the test to include the SET ANSI_NULLS... boilerplate in the expected script.
+					// Remove it from the actual.
+					if
+					(
+						!expectedScript.StartsWith("SET ANSI_NULLS")
+						&& actualScript.StartsWith("SET ANSI_NULLS")
+						&& actualScript.Contains("GO\r\n")
+					)
+						actualScript = actualScript.Substring(actualScript.IndexOf("GO\r\n") + 4);
 					Assert.AreEqual(expectedScript, actualScript, "GenerateScript() output script not as expected.");
 				}
 			}

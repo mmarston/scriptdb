@@ -96,10 +96,6 @@ CREATE TABLE [dbo].[TestTable1] (
 
 
 GO
-PRINT N'Update complete.';
-
-
-GO
 ";
 			ExecuteTest(script1, script2, expectedScript);
 		}
@@ -165,6 +161,15 @@ GO
 				}
 				else
 				{
+					// We don't require the test to include the SET ANSI_NULLS... boilerplate in the expected script.
+					// Remove it from the actual.
+					if
+					(
+						!expectedScript.StartsWith("SET ANSI_NULLS")
+						&& actualScript.StartsWith("SET ANSI_NULLS")
+						&& actualScript.Contains("GO\r\n")
+					)
+						actualScript = actualScript.Substring(actualScript.IndexOf("GO\r\n") + 4);
 					Assert.AreEqual(expectedScript, actualScript, "GenerateScript() output script not as expected.");
 				}
 			}

@@ -810,6 +810,7 @@ WHERE EXISTS
 						if(rowCount % batchSize == 0)
 						{
 							// Every so many rows (batch size), write the batch and reset the insert statement.
+							insertStatement.Append(';');
 							WriteBatch(insertStatement.ToString());
 							insertStatement.Length = baseStatementLength;
 							delimiter = null;
@@ -818,6 +819,7 @@ WHERE EXISTS
 					if(rowCount % batchSize != 0)
 					{
 						// Write the the last batch (unless the last row was the end of a batch).
+						insertStatement.Append(';');
 						WriteBatch(insertStatement.ToString());
 					}
 
