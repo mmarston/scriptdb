@@ -82,7 +82,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 		public string TargetDirectory { get; set; }
 		public string TargetServerName { get; set; }
 
-		public void GenerateScripts()
+		public bool GenerateScripts()
 		{
 			VerifyProperties();
 			hasUpgradeScript = false;
@@ -207,6 +207,11 @@ namespace Mercent.SqlServer.Management.Upgrade
 
 			totalStopwatch.Stop();
 			OutputSummaryMessage(upgradedTargetMatchesSource, totalStopwatch.Elapsed);
+
+			// Return false when generating upgrade scripts failed.
+			// If there were no errors and the upgraded target matches the source,
+			// then return true.
+			return !hasUpgradeScriptError && upgradedTargetMatchesSource;
 		}
 
 		private void AddAndExecute(TextWriter writer, IEnumerable<FileInfo> scriptFiles)

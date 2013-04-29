@@ -22,24 +22,24 @@ namespace Mercent.SqlServer.Management
 {
 	class Program
 	{
-		static void Main(string[] args)
+		static int Main(string[] args)
 		{
 			if(args.Length < 2)
 			{
 				ShowUsage();
-				return;
+				return 1;
 			}
 			if(String.Equals(args[0], "-Upgrade", StringComparison.OrdinalIgnoreCase))
 			{
-				Upgrade(args);
+				return Upgrade(args);
 			}
 			else
 			{
-				Create(args);
+				return Create(args);
 			}
 		}
 
-		private static void Create(string[] args)
+		private static int Create(string[] args)
 		{
 			FileScripter scripter = new FileScripter();
 			scripter.ServerName = args[0];
@@ -61,12 +61,13 @@ namespace Mercent.SqlServer.Management
 				}
 				else
 				{
-					Console.WriteLine("Unexpected argument: {0}", arg);
+					Console.Error.WriteLine("Unexpected argument: {0}", arg);
 					ShowUsage();
-					return;
+					return 1;
 				}
 			}
 			scripter.Script();
+			return 0;
 		}
 
 		private static void ShowUsage()
@@ -81,12 +82,12 @@ namespace Mercent.SqlServer.Management
 			);
 		}
 
-		private static void Upgrade(string[] args)
+		private static int Upgrade(string[] args)
 		{
 			if(args.Length < 4)
 			{
 				ShowUsage();
-				return;
+				return 1;
 			}
 
 			UpgradeScripter scripter = new UpgradeScripter();
@@ -105,9 +106,9 @@ namespace Mercent.SqlServer.Management
 					}
 					else
 					{
-						Console.WriteLine("Missing value of {0} argument.", arg);
+						Console.Error.WriteLine("Missing value of {0} argument.", arg);
 						ShowUsage();
-						return;
+						return 1;
 					}
 				}
 				else if
@@ -123,9 +124,9 @@ namespace Mercent.SqlServer.Management
 					}
 					else
 					{
-						Console.WriteLine("Missing value of {0} argument.", arg);
+						Console.Error.WriteLine("Missing value of {0} argument.", arg);
 						ShowUsage();
-						return;
+						return 1;
 					}
 				}
 				else if
@@ -141,9 +142,9 @@ namespace Mercent.SqlServer.Management
 					}
 					else
 					{
-						Console.WriteLine("Missing value of {0} argument.", arg);
+						Console.Error.WriteLine("Missing value of {0} argument.", arg);
 						ShowUsage();
-						return;
+						return 1;
 					}
 				}
 				else if(String.IsNullOrEmpty(scripter.OutputDirectory))
@@ -152,15 +153,18 @@ namespace Mercent.SqlServer.Management
 				}
 				else
 				{
-					Console.WriteLine("Unexpected argument: {0}", arg);
+					Console.Error.WriteLine("Unexpected argument: {0}", arg);
 					ShowUsage();
-					return;
+					return 1;
 				}
 			}
 
 			try
 			{
-				scripter.GenerateScripts();
+				if(scripter.GenerateScripts())
+					return 0;
+				else
+					return 1;
 			}
 			catch(AbortException)
 			{
@@ -168,6 +172,7 @@ namespace Mercent.SqlServer.Management
 				// The error was already output and the user was
 				// prompted whether to continue. The user chose
 				// not to continue (so abort).
+				return 1;
 			}
 		}
 	}
