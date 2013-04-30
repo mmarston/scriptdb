@@ -1420,15 +1420,14 @@ namespace Mercent.SqlServer.Management
 			RunBcp(bcpArguments);
 
 			// Modify the format file so that the data file will be formatted how we want it to be.
-			IEnumerable<Column> columns = GetBulkCopyColumns(table);
-			ModifyOutUtf16BcpFormatFile(formatFile, columns);
+			ModifyOutUtf16BcpFormatFile(formatFile, table);
 
 			// Run bcp to create the data file.
 			// bcp "SELECT CONVERT(nvarchar(2), null), <columns> FROM [schema].[table] <order by clause>" queryout tmpDataFile -S servername -d database -T -f formatFile
 			bcpArguments = String.Format
 			(
 				"\"SELECT CONVERT(nvarchar(2), null), {0} FROM {1}.{2} {3}\" queryout \"{4}\" -S \"{5}\" -d \"{6}\" -T -f \"{7}\"",
-				GetBulkCopySelectString(columns),
+				GetBulkCopySelectString(table),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
 				GetOrderByClauseForTable(table),
@@ -1487,15 +1486,14 @@ namespace Mercent.SqlServer.Management
 			RunBcp(bcpArguments);
 
 			// Modify the format file so that the data file will be formatted how we want it to be.
-			IEnumerable<Column> columns = GetBulkCopyColumns(table);
-			ModifyOutCodePageBcpFormatFile(formatFile, columns);
+			ModifyOutCodePageBcpFormatFile(formatFile, table);
 
 			// Run bcp to create the data file.
 			// bcp "SELECT CONVERT(nvarchar(2), null), <columns> FROM [schema].[table] <order by clause>" queryout dataFile -S servername -d database -T -C codePage -f formatFile
 			bcpArguments = String.Format
 			(
 				"\"SELECT CONVERT(nvarchar(2), null), {0} FROM {1}.{2} {3}\" queryout \"{4}\" -S \"{5}\" -d \"{6}\" -T -C {7} -f \"{8}\"",
-				GetBulkCopySelectString(columns),
+				GetBulkCopySelectString(table),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
 				GetOrderByClauseForTable(table),
@@ -1550,15 +1548,14 @@ namespace Mercent.SqlServer.Management
 			RunBcp(bcpArguments);
 
 			// Modify the format file so that the data file will be formatted how we want it to be.
-			IEnumerable<Column> columns = GetBulkCopyColumns(table);
-			ModifyOutCompactCodePageBcpFormatFile(formatFile, columns);
+			ModifyOutCompactCodePageBcpFormatFile(formatFile, table);
 
 			// Run bcp to create the data file.
 			// bcp "SELECT CONVERT(nvarchar(2), null), <columns> FROM [schema].[table] <order by clause>" queryout dataFile -S servername -d database -T -C codePage -f formatFile
 			bcpArguments = String.Format
 			(
 				"\"SELECT CONVERT(nvarchar(2), null), {0} FROM {1}.{2} {3}\" queryout \"{4}\" -S \"{5}\" -d \"{6}\" -T -C {7} -f \"{8}\"",
-				GetBulkCopySelectString(columns),
+				GetBulkCopySelectString(table),
 				MakeSqlBracket(table.Schema),
 				MakeSqlBracket(table.Name),
 				GetOrderByClauseForTable(table),
@@ -1575,19 +1572,24 @@ namespace Mercent.SqlServer.Management
 			ModifyInCodePageBcpFormatFile(formatFile);
 		}
 
-		private IEnumerable<Column> GetBulkCopyColumns(Table table)
+		private bool SkipBulkCopyColumn(Column column)
 		{
-			return table.Columns
-				.Cast<Column>()
-				.Where
-				(
-					c => !(c.Computed || GetBaseSqlDataType(c.DataType) == SqlDataType.Timestamp)
-				);
+			return column.Computed || GetBaseSqlDataType(column.DataType) == SqlDataType.Timestamp;
 		}
 
-		private string GetBulkCopySelectString(IEnumerable<Column> columns)
+		private string GetBulkCopySelectString(Table table)
 		{
-			return String.Join(", ", columns.Select(c => MakeSqlBracket(c.Name)));
+			return String.Join(", ", table.Columns.Cast<Column>().Select(GetBulkCopySelectString));
+		}
+
+		private string GetBulkCopySelectString(Column column)
+		{
+			// For columns to be skipped (e.g. computed, timestamp) all we need is a null
+			// placeholder column--the type doesn't really matter, so we make it a bit.
+			if(SkipBulkCopyColumn(column))
+				return "CONVERT(bit, NULL)";
+			else
+				return MakeSqlBracket(column.Name);
 		}
 
 		/// <summary>
@@ -1631,14 +1633,15 @@ namespace Mercent.SqlServer.Management
 		/// This method adds an extra "padding" column so that the terminator of this column will look
 		/// like the label for the first column.
 		/// </remarks>
-		private void ModifyOutUtf16BcpFormatFile(string formatFile, IEnumerable<Column> bulkCopyColumns)
+		private void ModifyOutUtf16BcpFormatFile(string formatFile, Table table)
 		{
 			ModifyOutBcpFormatFile
 			(
 				formatFile,
-				bulkCopyColumns,
+				table,
 				name => EscapeUtf16BcpTerminator(@"{\r\n\t" + name + @": "),
 				name => EscapeUtf16BcpTerminator(@",\r\n\t" + name + @": "),
+				EscapeUtf16BcpTerminator("*"),
 				EscapeUtf16BcpTerminator(@"\r\n}\r\n")
 			);
 		}
@@ -1653,14 +1656,15 @@ namespace Mercent.SqlServer.Management
 		/// This method adds an extra "padding" column so that the terminator of this column will look
 		/// like the label for the first column.
 		/// </remarks>
-		private void ModifyOutCodePageBcpFormatFile(string formatFile, IEnumerable<Column> bulkCopyColumns)
+		private void ModifyOutCodePageBcpFormatFile(string formatFile, Table table)
 		{
 			ModifyOutBcpFormatFile
 			(
 				formatFile,
-				bulkCopyColumns,
+				table,
 				name => @"{\r\n\t" + name + @": ",
 				name => @",\r\n\t" + name + @": ",
+				"*",
 				@"\r\n}\r\n"
 			);
 		}
@@ -1675,14 +1679,15 @@ namespace Mercent.SqlServer.Management
 		/// This method adds an extra "padding" column so that the terminator of this column will look
 		/// like the label for the first column.
 		/// </remarks>
-		private void ModifyOutCompactCodePageBcpFormatFile(string formatFile, IEnumerable<Column> bulkCopyColumns)
+		private void ModifyOutCompactCodePageBcpFormatFile(string formatFile, Table table)
 		{
 			ModifyOutBcpFormatFile
 			(
 				formatFile,
-				bulkCopyColumns,
+				table,
 				name => "«",
 				name => "»,«",
+				"*",
 				@"»;\r\n"
 			);
 		}
@@ -1691,25 +1696,24 @@ namespace Mercent.SqlServer.Management
 		/// Modifies a bcp format file to output a data file with a format similar custom terminators.
 		/// </summary>
 		/// <param name="formatFile"></param>
-		/// <param name="bulkCopyColumns"></param>
+		/// <param name="table"></param>
 		/// <param name="firstTerminatorSelector">Function that returns the terminator for the first column from the column name.</param>
 		/// <param name="innerTerminatorSelector">Function that returns the terminator for an inner column from the column name.</param>
+		/// <param name="replacement">Text to use in place of a calculated or timestamp column.</param>
 		/// <param name="rowTerminator">Terminator to use for the row (the last column).</param>
 		private void ModifyOutBcpFormatFile
 		(
 			string formatFile,
-			IEnumerable<Column> bulkCopyColumns,
+			Table table,
 			Func<string, string> firstTerminatorSelector,
 			Func<string, string> innerTerminatorSelector,
+			string replacement,
 			string rowTerminator
 		)
 		{
 			XElement formatElement = XElement.Load(formatFile);
 			XNamespace ns = "http://schemas.microsoft.com/sqlserver/2004/bulkload/format";
 			XNamespace xsi = "http://www.w3.org/2001/XMLSchema-instance";
-
-			// Create a hash set of the columns to be included.
-			HashSet<string> includedColumns = new HashSet<string>(bulkCopyColumns.Select(c => c.Name));
 
 			// The format file has a "RECORD" that contains "FIELD" elements that describe the
 			// format of data field in the data file.
@@ -1725,11 +1729,6 @@ namespace Mercent.SqlServer.Management
 			// Get an array of the columns.
 			var columns = row.Elements(ns + "COLUMN").ToList();
 
-			// We will reset the IDs of the fields since some of them
-			// may not be included in the modified format file.
-			// We'll start at the end and work in reverse order.
-			int id = includedColumns.Count;
-
 			// Use this terminator for the last included column
 			// (the first one to be processed in reverse order).
 			string terminator = rowTerminator;
@@ -1741,31 +1740,17 @@ namespace Mercent.SqlServer.Management
 				var column = columns[index];
 				string columnName = (string)column.Attribute("NAME");
 
-				if(includedColumns.Contains(columnName))
-				{
-					// Update the ID and TERMINATOR and of the field.
-					field.SetAttributeValue("ID", id);
-					field.SetAttributeValue("TERMINATOR", terminator);
+				// If the column should be skipped, then prepend the replacement text (e.g. *)
+				// to the terminator.
+				if(SkipBulkCopyColumn(table.Columns[index]))
+					terminator = replacement + terminator;
 
-					// Update the SOURCE of the column.
-					column.SetAttributeValue("SOURCE", id);
+				// Update the TERMINATOR of the field.
+				field.SetAttributeValue("TERMINATOR", terminator);
 
-					// Decrement the id (since we are iterating in reverse order).
-					id--;
-
-					// Use this column's name in the terminator for the next column
-					// ("next" in reverse, so really the preceeding column).
-					terminator = innerTerminatorSelector(columnName);
-				}
-				else
-				{
-					// Remove the field and column from the lists and from the XML
-					// since it was not in the set of included columns.
-					fields.RemoveAt(index);
-					columns.RemoveAt(index);
-					field.Remove();
-					column.Remove();
-				}
+				// Use this column's name in the terminator for the next column
+				// ("next" in reverse, so really the preceeding column).
+				terminator = innerTerminatorSelector(columnName);
 			}
 
 			string firstColumnName = (string)columns[0].Attribute("NAME");
