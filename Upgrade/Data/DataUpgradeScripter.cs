@@ -117,9 +117,7 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 
 				DeleteRows();
 
-				UpdateRows();
-
-				InsertRows();
+				UpdateAndInsertRows();
 
 				EnableTriggers();
 
@@ -306,7 +304,7 @@ WHERE EXISTS
 				var statements = tableInfo.DeleteStatements;
 				if(statements.Count > 0)
 				{
-					WriteBatch("PRINT 'Deleting {0} row(s) from {1}.';", statements.Count, EscapeStringLiteral(tableInfo.QualifiedName));
+					WriteBatch("PRINT 'Deleting {0:N0} row(s) from {1}.';", statements.Count, EscapeStringLiteral(tableInfo.QualifiedName));
 					WriteStatements(statements);
 				}
 			}
@@ -765,68 +763,65 @@ WHERE EXISTS
 			return tablesWithData;
 		}
 
-		private void InsertRows()
+		private void InsertRows(TableInfo tableInfo)
 		{
-			foreach(var tableInfo in orderedTables)
+			var statements = tableInfo.InsertStatements;
+			if(statements.Count == 0)
+				return;
+
+			WriteBatch("PRINT 'Inserting {0:N0} row(s) into {1}.';", statements.Count, EscapeStringLiteral(tableInfo.QualifiedName));
+			if(tableInfo.HasIdentityColumn)
+				WriteBatch("SET IDENTITY_INSERT {0} ON;", tableInfo.QualifiedName);
+
+			// Build the base INSERT statement (without the values from any rows).
+			StringBuilder insertStatement = new StringBuilder();
+			insertStatement.AppendFormat("INSERT INTO {0} (", tableInfo.QualifiedName);
+			string delimiter = null;
+			foreach(var columnInfo in tableInfo.Columns)
 			{
-				var statements = tableInfo.InsertStatements;
-				if(statements.Count > 0)
+				if(delimiter == null)
+					delimiter = ", ";
+				else
+					insertStatement.Append(delimiter);
+				insertStatement.Append(columnInfo.QuotedName);
+					
+			}
+			insertStatement.AppendLine(")");
+			insertStatement.Append("VALUES ");
+					
+			// Get the length of the base INSERT statement (used to reset the statement length later).
+			int baseStatementLength = insertStatement.Length;
+					
+			delimiter = null;
+			int batchSize = 100;
+			int rowCount = 0;
+			foreach(string values in tableInfo.InsertStatements)
+			{
+				if(delimiter == null)
+					delimiter = ",\r\n\t";
+				else
+					insertStatement.Append(delimiter);
+				insertStatement.Append(values);
+
+				rowCount++;
+				if(rowCount % batchSize == 0)
 				{
-					WriteBatch("PRINT 'Inserting {0} row(s) into {1}.';", statements.Count, EscapeStringLiteral(tableInfo.QualifiedName));
-					if(tableInfo.HasIdentityColumn)
-						WriteBatch("SET IDENTITY_INSERT {0} ON;", tableInfo.QualifiedName);
-
-					// Build the base INSERT statement (without the values from any rows).
-					StringBuilder insertStatement = new StringBuilder();
-					insertStatement.AppendFormat("INSERT INTO {0} (", tableInfo.QualifiedName);
-					string delimiter = null;
-					foreach(var columnInfo in tableInfo.Columns)
-					{
-						if(delimiter == null)
-							delimiter = ", ";
-						else
-							insertStatement.Append(delimiter);
-						insertStatement.Append(columnInfo.QuotedName);
-					
-					}
-					insertStatement.AppendLine(")");
-					insertStatement.Append("VALUES ");
-					
-					// Get the length of the base INSERT statement (used to reset the statement length later).
-					int baseStatementLength = insertStatement.Length;
-					
+					// Every so many rows (batch size), write the batch and reset the insert statement.
+					insertStatement.Append(';');
+					WriteBatch(insertStatement.ToString());
+					insertStatement.Length = baseStatementLength;
 					delimiter = null;
-					int batchSize = 100;
-					int rowCount = 0;
-					foreach(string values in tableInfo.InsertStatements)
-					{
-						if(delimiter == null)
-							delimiter = ",\r\n\t";
-						else
-							insertStatement.Append(delimiter);
-						insertStatement.Append(values);
-
-						rowCount++;
-						if(rowCount % batchSize == 0)
-						{
-							// Every so many rows (batch size), write the batch and reset the insert statement.
-							insertStatement.Append(';');
-							WriteBatch(insertStatement.ToString());
-							insertStatement.Length = baseStatementLength;
-							delimiter = null;
-						}
-					}
-					if(rowCount % batchSize != 0)
-					{
-						// Write the the last batch (unless the last row was the end of a batch).
-						insertStatement.Append(';');
-						WriteBatch(insertStatement.ToString());
-					}
-
-					if(tableInfo.HasIdentityColumn)
-						WriteBatch("SET IDENTITY_INSERT {0} OFF;", tableInfo.QualifiedName);
 				}
 			}
+			if(rowCount % batchSize != 0)
+			{
+				// Write the the last batch (unless the last row was the end of a batch).
+				insertStatement.Append(';');
+				WriteBatch(insertStatement.ToString());
+			}
+
+			if(tableInfo.HasIdentityColumn)
+				WriteBatch("SET IDENTITY_INSERT {0} OFF;", tableInfo.QualifiedName);
 		}
 
 		private bool QueryForUniqueMismatch(Index index, TableInfo tableInfo)
@@ -1103,17 +1098,23 @@ WHERE EXISTS
 			return QueryForUniqueMismatch(index, tableInfo);
 		}
 
-		private void UpdateRows()
+		private void UpdateAndInsertRows()
 		{
 			foreach(var tableInfo in orderedTables)
 			{
-				var statements = tableInfo.UpdateStatements;
-				if(statements.Count > 0)
-				{
-					WriteBatch("PRINT 'Updating {0} row(s) in {1}.';", statements.Count, EscapeStringLiteral(tableInfo.QualifiedName));
-					WriteStatements(statements);
-				}
+				UpdateRows(tableInfo);
+				InsertRows(tableInfo);
 			}
+		}
+
+		private void UpdateRows(TableInfo tableInfo)
+		{
+			var statements = tableInfo.UpdateStatements;
+			if(statements.Count == 0)
+				return;
+
+			WriteBatch("PRINT 'Updating {0:N0} row(s) in {1}.';", statements.Count, EscapeStringLiteral(tableInfo.QualifiedName));
+			WriteStatements(statements);
 		}
 
 		private void VerifyProperties()
