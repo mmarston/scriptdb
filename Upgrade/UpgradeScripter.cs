@@ -166,7 +166,11 @@ namespace Mercent.SqlServer.Management.Upgrade
 				AfterUpgrade(upgradeWriter);
 
 				// Generate the final schema upgrade script.
-				SchemaUpgradeFinal(upgradeWriter, schemaUpgradeScripter, schemaFinalFile);
+				// We can skip this if there are no other upgrade scripts.
+				if(hasUpgradeScript)
+				{
+					SchemaUpgradeFinal(upgradeWriter, schemaUpgradeScripter, schemaFinalFile);
+				}
 
 				// Generate a clean set of scripts for the source database (the "expected" result) in parallel.
 				Task generateSourceCreateScriptsTask = Task.Run(() => GenerateSourceCreateScripts(expectedDirectory));
