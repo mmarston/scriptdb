@@ -50,6 +50,8 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 
 		public bool HasIdentityColumn { get; set; }
 
+		public bool IgnoreDelete { get; set; }
+
 		/// <summary>
 		/// The values for INSERT statements.
 		/// </summary>

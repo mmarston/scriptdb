@@ -25,5 +25,16 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 		}
 
 		public bool DisableTriggers { get; set; }
+
+		/// <summary>
+		/// Ingore tables that are empty in the source database.
+		/// </summary>
+		/// <remarks>
+		/// Use this option when you want to keep target database rows
+		/// in tables that are empty in the source database.
+		/// </remarks>
+		public bool IgnoreEmptySourceTables { get; set; }
+
+		public bool SyncMode { get; set; }
 	}
 }

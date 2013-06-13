@@ -89,6 +89,20 @@ namespace Mercent.SqlServer.Management
 			set { encoding = value; }
 		}
 
+		/// <summary>
+		/// Force the scripter to continue even when errors or data loss may occur.
+		/// </summary>
+		/// <remarks>
+		/// Set this to <c>true</c> or <c>false</c> when running using automation tools
+		/// that don't have an user interaction. This avoids prompting the user.
+		/// This setting affects any errors where the user would normally be given the option
+		/// to continue or abort (a "prompted" error). It also suppresses prompting the user for what to do with
+		/// extra files. When set to <c>true</c> the scripter will continue on prompted
+		/// errors and will delete extra files. When set to <c>false</c> the scripter
+		/// will abort on prompted errors and keep extra files.
+		/// </remarks>
+		public bool? ForceContinue { get; set; }
+
 		public bool TargetDataTools { get; set; }
 
 		private SqlServerVersion targetServerVersion = SqlServerVersion.Version110;
@@ -235,9 +249,22 @@ namespace Mercent.SqlServer.Management
 			ignoreFileSet.Clear();
 			extendedPropertySet.Clear();
 			ignoreFileSetModified = false;
-			allEmptyDirectoriesResponseChar = '\0';
-			allExtraFilesResponseChar = '\0';
-			
+			if(!ForceContinue.HasValue)
+			{
+				allEmptyDirectoriesResponseChar = '\0';
+				allExtraFilesResponseChar = '\0';
+			}
+			else if(ForceContinue.Value)
+			{
+				allEmptyDirectoriesResponseChar = 'd';
+				allExtraFilesResponseChar = 'd';
+			}
+			else
+			{
+				allEmptyDirectoriesResponseChar = 'k';
+				allExtraFilesResponseChar = 'k';
+			}
+
 			// When using the Server(string serverName) constructor some things
 			// don't work correct. In particular, some things (such as DatabaseRole.EnumRoles())
 			// incorrectly query the master database (or whatever the default database is for the login)

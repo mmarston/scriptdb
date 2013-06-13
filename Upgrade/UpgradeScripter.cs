@@ -35,6 +35,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 
 		private bool hasUpgradeScript = false;
 		private bool hasUpgradeScriptError = false;
+		private bool syncMode = false;
 
 		public UpgradeScripter()
 		{
@@ -44,6 +45,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 		}
 
 		public Encoding Encoding { get; set; }
+		public bool? ForceContinue { get; set; }
 		public string OutputDirectory { get; set; }
 
 		/// <summary>
@@ -84,138 +86,12 @@ namespace Mercent.SqlServer.Management.Upgrade
 
 		public bool GenerateScripts()
 		{
-			VerifyProperties();
-			hasUpgradeScript = false;
-			hasUpgradeScriptError = false;
+			return GenerateScripts(false);
+		}
 
-			var totalStopwatch = Stopwatch.StartNew();
-
-			SchemaUpgradeScripter schemaUpgradeScripter = new SchemaUpgradeScripter
-			{
-				SourceServerName = SourceServerName,
-				SourceDatabaseName = SourceDatabaseName,
-				TargetServerName = TargetServerName,
-				TargetDatabaseName = TargetDatabaseName
-			};
-
-			if(!String.IsNullOrWhiteSpace(OutputDirectory) && !Directory.Exists(OutputDirectory))
-				Directory.CreateDirectory(OutputDirectory);
-
-			CreateDatabases();
-
-			bool upgradedTargetMatchesSource;
-			FileInfo sourcePackageFile = new FileInfo(Path.Combine(OutputDirectory, "Temp", "Source.dacpac"));
-			FileInfo targetPackageFile = new FileInfo(Path.Combine(OutputDirectory, "Temp", "Target.dacpac"));
-			string upgradeFileName = String.IsNullOrEmpty(this.SingleFileName) ? "Upgrade.sql" : this.SingleFileName;
-			FileInfo upgradeFile = new FileInfo(Path.Combine(OutputDirectory, upgradeFileName));
-			FileInfo schemaUpgradeFile = new FileInfo(Path.Combine(OutputDirectory, "SchemaUpgrade.sql"));
-			FileInfo schemaUpgradeReportFile = new FileInfo(Path.Combine(OutputDirectory, "Log", "SchemaUpgradeReport.xml"));
-			FileInfo dataUpgradeFile = new FileInfo(Path.Combine(OutputDirectory, "DataUpgrade.sql"));
-			FileInfo schemaFinalFile = new FileInfo(Path.Combine(OutputDirectory, "SchemaFinal.sql"));
-			DirectoryInfo expectedDirectory = new DirectoryInfo(Path.Combine(OutputDirectory, @"Compare\Expected"));
-			DirectoryInfo actualDirectory = new DirectoryInfo(Path.Combine(OutputDirectory, @"Compare\Actual"));
-			TextWriter upgradeWriter = null;
-			try
-			{
-				upgradeWriter = CreateText(upgradeFile);
-
-				// Ensure that errors will cause the script to be aborted.
-				upgradeWriter.WriteLine("SET XACT_ABORT ON;");
-				upgradeWriter.WriteLine("GO");
-				upgradeWriter.WriteLine(":on error exit");
-				upgradeWriter.WriteLine("GO");
-
-				// Run schema prep scripts (if any) and add them to the upgrade script
-				// before comparing the schema.
-				SchemaPrep(upgradeWriter);
-
-				// Extract the source package in parallel.
-				Task<DacPackage> extractSourceTask = Task.Run(() => ExtractSource(schemaUpgradeScripter, sourcePackageFile));
-
-				// Extract the target package.
-				schemaUpgradeScripter.TargetPackage = ExtractTarget(schemaUpgradeScripter, targetPackageFile);
-
-				// Get the result (the package) from the extract source parallel task.
-				schemaUpgradeScripter.SourcePackage = extractSourceTask.Result;
-
-				// Generate the schema upgrade script.
-				// The SchemaUpgrade method has an option to delay dropping objects not in the source.
-				// The purpose of this was to make it easier to write a custom script
-				// to move data to a new table from a table that will be dropped.
-				// It won't work to put the DML statment in a schema prep script
-				// because the new table won't exist yet. On the other hand,
-				// it won't work to the DML statement in a data prep or after upgrade script
-				// because the old table will already be dropped.
-				// To solve this dilema, I had experimented with delaying the drop statements
-				// until the final schema upgrade script that runs last.
-				// The dropObjectsNotInSource variable was set to false if a data prep or after upgrade script exists.
-				// However, that caused schema upgrade failures when a new object in the source has the same
-				// name as a target object to be dropped (e.g. replacing a table with a view of the same name).
-				bool dropObjectsNotInSource = true;
-				SchemaUpgrade(upgradeWriter, schemaUpgradeScripter, schemaUpgradeFile, schemaUpgradeReportFile, dropObjectsNotInSource);
-
-				// Run data prep scripts (if any) and add them to the upgrade script
-				// before comparing the data.
-				DataPrep(upgradeWriter);
-				
-				// Generate the data upgrade script.
-				DataUpgrade(upgradeWriter, dataUpgradeFile);
-
-				// Run after upgrade scripts files (if any) and add them to the upgrade script
-				// before verifying.
-				AfterUpgrade(upgradeWriter);
-
-				// Generate the final schema upgrade script.
-				// We can skip this if there are no other upgrade scripts.
-				if(hasUpgradeScript)
-				{
-					SchemaUpgradeFinal(upgradeWriter, schemaUpgradeScripter, schemaFinalFile);
-				}
-
-				// Generate a clean set of scripts for the source database (the "expected" result) in parallel.
-				Task generateSourceCreateScriptsTask = Task.Run(() => GenerateSourceCreateScripts(expectedDirectory));
-
-				// Generate a set of scripts for the upgraded target database (the "actual" result).
-				GenerateTargetCreateScripts(actualDirectory);
-
-				// Wait for the source scripts to be generated.
-				generateSourceCreateScriptsTask.Wait();
-
-				// Verify if the upgrade scripts succeed by checking if the database
-				// script files in the directories are identical.
-				upgradedTargetMatchesSource = AreDirectoriesIdentical(expectedDirectory, actualDirectory);
-			}
-			finally
-			{
-				// Delete the temporary package files if they exist.
-				// Note that we don't use the FileInfo.Exists property because
-				// that is set when the object is initialized (and updated by Refresh())
-				if(File.Exists(sourcePackageFile.FullName))
-					sourcePackageFile.Delete();
-				if(File.Exists(targetPackageFile.FullName))
-					targetPackageFile.Delete();
-				if(upgradeWriter != null)
-					upgradeWriter.Close();
-			}
-
-			// If there were no upgrade scripts generated then delete the main script.
-			if(!hasUpgradeScript)
-				upgradeFile.Delete();
-
-			// Output potential data issues only if there were no errors
-			// and the upgraded target matches the source.
-			// (Otherwise the user should focus on correcting the scripts
-			// to get the target to match the source.)
-			if(hasUpgradeScript && !hasUpgradeScriptError && upgradedTargetMatchesSource)
-				OutputDataIssues(schemaUpgradeReportFile);
-
-			totalStopwatch.Stop();
-			OutputSummaryMessage(upgradedTargetMatchesSource, totalStopwatch.Elapsed);
-
-			// Return false when generating upgrade scripts failed.
-			// If there were no errors and the upgraded target matches the source,
-			// then return true.
-			return !hasUpgradeScriptError && upgradedTargetMatchesSource;
+		public bool Sync()
+		{
+			return GenerateScripts(true);
 		}
 
 		private void AddAndExecute(TextWriter writer, IEnumerable<FileInfo> scriptFiles)
@@ -432,13 +308,23 @@ namespace Mercent.SqlServer.Management.Upgrade
 			return new StreamWriter(file.FullName, false, Encoding.Default);
 		}
 
+		private XmlWriter CreateXml(FileInfo file)
+		{
+			XmlWriterSettings settings = new XmlWriterSettings
+			{
+				Indent = true,
+				IndentChars = "\t"
+			};
+			return XmlWriter.Create(file.FullName, settings);
+		}
+
 		private bool DataPrep(TextWriter writer)
 		{
 			var scriptFiles = AddAndExecuteFiles(writer, "DataPrep*.sql");
 			return scriptFiles.Any();
 		}
 
-		private bool DataUpgrade(TextWriter upgradeWriter, FileInfo dataUpgradeFile)
+		private bool DataUpgrade(TextWriter upgradeWriter, FileInfo dataUpgradeFile, FileInfo dataUpgradeReportFile)
 		{
 			bool hasDataChanges;
 			var stopwatch = Stopwatch.StartNew();
@@ -453,9 +339,17 @@ namespace Mercent.SqlServer.Management.Upgrade
 				TargetDatabaseName = TargetDatabaseName
 			};
 
-			using(TextWriter writer = CreateText(dataUpgradeFile))
+			DataUpgradeOptions options = new DataUpgradeOptions
 			{
-				hasDataChanges = dataUpgradeScripter.GenerateScript(writer);
+				// When in sync mode, ignore empty source tables and set the sync mode option.
+				IgnoreEmptySourceTables = syncMode,
+				SyncMode = syncMode
+			};
+
+			using(TextWriter writer = CreateText(dataUpgradeFile))
+			using(XmlWriter reportWriter = CreateXml(dataUpgradeReportFile))
+			{
+				hasDataChanges = dataUpgradeScripter.GenerateScript(writer, options, reportWriter);
 			}
 
 			stopwatch.Stop();
@@ -471,6 +365,9 @@ namespace Mercent.SqlServer.Management.Upgrade
 					dataUpgradeFile.Name,
 					stopwatch.Elapsed.ToString(elapsedTimeFormat)
 				);
+				// When in sync mode we want to show potential data issues before executing the script.
+				if(syncMode)
+					OutputDataIssues(dataUpgradeReportFile);
 				AddAndExecute(upgradeWriter, dataUpgradeFile);
 			}
 			else
@@ -480,7 +377,6 @@ namespace Mercent.SqlServer.Management.Upgrade
 			}
 			return hasDataChanges;
 		}
-
 		private void ErrorWriteLine()
 		{
 			lock(consoleLock)
@@ -552,17 +448,25 @@ namespace Mercent.SqlServer.Management.Upgrade
 			{
 				ServerName = serverName,
 				DatabaseName = databaseName,
-				OutputDirectory = outputDirectory.FullName
+				OutputDirectory = outputDirectory.FullName,
+				// We want the creation script generator to continue without ever
+				// prompting the user.
+				ForceContinue = true
 			};
+			int deleteAttempt = 0;
 			// Delete the directory if it already exists.
 			while(Directory.Exists(fileScripter.OutputDirectory))
 			{
 				try
 				{
+					deleteAttempt++;
 					Directory.Delete(fileScripter.OutputDirectory, true);
 				}
 				catch(Exception ex)
 				{
+					// If ForceContinue has a value then allow 3 attempts.
+					if(deleteAttempt < 3 && ForceContinue.HasValue)
+						continue;
 					string message = String.Format("Failed to delete the directory {0}\r\n{1}", fileScripter.OutputDirectory, ex.Message);
 					ErrorWriteLine(message);
 					if(!PromptRetry())
@@ -626,6 +530,152 @@ namespace Mercent.SqlServer.Management.Upgrade
 			}
 		}
 
+		private bool GenerateScripts(bool syncMode)
+		{
+			VerifyProperties();
+			hasUpgradeScript = false;
+			hasUpgradeScriptError = false;
+			this.syncMode = syncMode;
+
+			var totalStopwatch = Stopwatch.StartNew();
+
+			SchemaUpgradeScripter schemaUpgradeScripter = new SchemaUpgradeScripter
+			{
+				SourceServerName = SourceServerName,
+				SourceDatabaseName = SourceDatabaseName,
+				TargetServerName = TargetServerName,
+				TargetDatabaseName = TargetDatabaseName
+			};
+
+			if(!String.IsNullOrWhiteSpace(OutputDirectory) && !Directory.Exists(OutputDirectory))
+				Directory.CreateDirectory(OutputDirectory);
+
+			CreateDatabases();
+
+			bool upgradedTargetMatchesSource = false;
+			FileInfo sourcePackageFile = new FileInfo(Path.Combine(OutputDirectory, "Temp", "Source.dacpac"));
+			FileInfo targetPackageFile = new FileInfo(Path.Combine(OutputDirectory, "Temp", "Target.dacpac"));
+			string upgradeFileName = String.IsNullOrEmpty(this.SingleFileName) ? "Upgrade.sql" : this.SingleFileName;
+			FileInfo upgradeFile = new FileInfo(Path.Combine(OutputDirectory, upgradeFileName));
+			FileInfo schemaUpgradeFile = new FileInfo(Path.Combine(OutputDirectory, "SchemaUpgrade.sql"));
+			FileInfo schemaUpgradeReportFile = new FileInfo(Path.Combine(OutputDirectory, "Log", "SchemaUpgradeReport.xml"));
+			FileInfo dataUpgradeFile = new FileInfo(Path.Combine(OutputDirectory, "DataUpgrade.sql"));
+			FileInfo dataUpgradeReportFile = new FileInfo(Path.Combine(OutputDirectory, "Log", "DataUpgradeReport.xml"));
+			FileInfo schemaFinalFile = new FileInfo(Path.Combine(OutputDirectory, "SchemaFinal.sql"));
+			DirectoryInfo expectedDirectory = new DirectoryInfo(Path.Combine(OutputDirectory, @"Compare\Expected"));
+			DirectoryInfo actualDirectory = new DirectoryInfo(Path.Combine(OutputDirectory, @"Compare\Actual"));
+			TextWriter upgradeWriter = null;
+			try
+			{
+				upgradeWriter = CreateText(upgradeFile);
+
+				// Ensure that errors will cause the script to be aborted.
+				upgradeWriter.WriteLine("SET XACT_ABORT ON;");
+				upgradeWriter.WriteLine("GO");
+				upgradeWriter.WriteLine(":on error exit");
+				upgradeWriter.WriteLine("GO");
+
+				// Run schema prep scripts (if any) and add them to the upgrade script
+				// before comparing the schema.
+				SchemaPrep(upgradeWriter);
+
+				// Extract the source package in parallel.
+				Task<DacPackage> extractSourceTask = Task.Run(() => ExtractSource(schemaUpgradeScripter, sourcePackageFile));
+
+				// Extract the target package.
+				schemaUpgradeScripter.TargetPackage = ExtractTarget(schemaUpgradeScripter, targetPackageFile);
+
+				// Get the result (the package) from the extract source parallel task.
+				schemaUpgradeScripter.SourcePackage = extractSourceTask.Result;
+
+				// Generate the schema upgrade script.
+				// The SchemaUpgrade method has an option to delay dropping objects not in the source.
+				// The purpose of this was to make it easier to write a custom script
+				// to move data to a new table from a table that will be dropped.
+				// It won't work to put the DML statment in a schema prep script
+				// because the new table won't exist yet. On the other hand,
+				// it won't work to the DML statement in a data prep or after upgrade script
+				// because the old table will already be dropped.
+				// To solve this dilema, I had experimented with delaying the drop statements
+				// until the final schema upgrade script that runs last.
+				// The dropObjectsNotInSource variable was set to false if a data prep or after upgrade script exists.
+				// However, that caused schema upgrade failures when a new object in the source has the same
+				// name as a target object to be dropped (e.g. replacing a table with a view of the same name).
+				bool dropObjectsNotInSource = true;
+				SchemaUpgrade(upgradeWriter, schemaUpgradeScripter, schemaUpgradeFile, schemaUpgradeReportFile, dropObjectsNotInSource);
+
+				// Run data prep scripts (if any) and add them to the upgrade script
+				// before comparing the data.
+				DataPrep(upgradeWriter);
+
+				// Generate the data upgrade script.
+				DataUpgrade(upgradeWriter, dataUpgradeFile, dataUpgradeReportFile);
+
+				// Run after upgrade scripts files (if any) and add them to the upgrade script
+				// before verifying.
+				AfterUpgrade(upgradeWriter);
+
+				// When in sync mode skip final upgrade script and verification.
+				if(!syncMode)
+				{
+					// Generate the final schema upgrade script.
+					// We can skip this if there are no other upgrade scripts.
+					if(hasUpgradeScript && !syncMode)
+					{
+						SchemaUpgradeFinal(upgradeWriter, schemaUpgradeScripter, schemaFinalFile);
+					}
+
+					// Generate a clean set of scripts for the source database (the "expected" result) in parallel.
+					Task generateSourceCreateScriptsTask = Task.Run(() => GenerateSourceCreateScripts(expectedDirectory));
+
+					// Generate a set of scripts for the upgraded target database (the "actual" result).
+					GenerateTargetCreateScripts(actualDirectory);
+
+					// Wait for the source scripts to be generated.
+					generateSourceCreateScriptsTask.Wait();
+
+					// Verify if the upgrade scripts succeed by checking if the database
+					// script files in the directories are identical.
+					upgradedTargetMatchesSource = AreDirectoriesIdentical(expectedDirectory, actualDirectory);
+				}
+			}
+			finally
+			{
+				// Delete the temporary package files if they exist.
+				// Note that we don't use the FileInfo.Exists property because
+				// that is set when the object is initialized (and updated by Refresh())
+				if(File.Exists(sourcePackageFile.FullName))
+					sourcePackageFile.Delete();
+				if(File.Exists(targetPackageFile.FullName))
+					targetPackageFile.Delete();
+				if(upgradeWriter != null)
+					upgradeWriter.Close();
+			}
+
+			// If there were no upgrade scripts generated then delete the main script.
+			if(!hasUpgradeScript)
+				upgradeFile.Delete();
+
+			// Output potential data issues only if there were no errors
+			// and the upgraded target matches the source.
+			// (Otherwise the user should focus on correcting the scripts
+			// to get the target to match the source.)
+			// Also, do not output when in sync mode (the data issues were already output).
+			if(hasUpgradeScript && !hasUpgradeScriptError && upgradedTargetMatchesSource)
+			{
+				OutputSchemaIssues(schemaUpgradeReportFile);
+				OutputDataIssues(dataUpgradeReportFile);
+			}
+
+			totalStopwatch.Stop();
+			OutputSummaryMessage(upgradedTargetMatchesSource, totalStopwatch.Elapsed);
+
+			// Return false when generating upgrade scripts failed.
+			// If there were no errors and the upgraded target matches the source,
+			// then return true.
+			return !hasUpgradeScriptError && upgradedTargetMatchesSource;
+		}
+
 		private DirectoryInfo GenerateSourceCreateScripts(DirectoryInfo directory)
 		{
 			var stopwatch = Stopwatch.StartNew();
@@ -667,7 +717,37 @@ namespace Mercent.SqlServer.Management.Upgrade
 		/// <summary>
 		/// Warn the user about potential data issues.
 		/// </summary>
-		private void OutputDataIssues(FileInfo schemaUpgradeReportFile)
+		private void OutputDataIssues(FileInfo dataUpgradeReportFile)
+		{
+			XElement deploymentReport = XElement.Load(dataUpgradeReportFile.FullName);
+			var deleteItems = deploymentReport
+				.Elements("Operations")
+				.Elements("Operation")
+				.Where(o => (string)o.Attribute("Name") == "Delete")
+				.Elements("Item")
+				.ToList();
+			if(deleteItems.Any())
+			{
+				ConsoleWriteLine(ConsoleColor.White, "\r\nReview tables with rows to be deleted:");
+				foreach(var item in deleteItems)
+				{
+					int rowCount = (int)item.Attribute("Rows");
+					string format;
+					if(rowCount == 1)
+						format = "{0,10:N0} row is being deleted from {1}.";
+					else
+						format = "{0,10:N0} rows are being deleted from {1}.";
+					ConsoleWriteLine(ConsoleColor.Yellow, format, rowCount, (string)item.Attribute("Value"));
+				}
+				if(syncMode && !PromptContinue())
+					throw new AbortException("Upgrade cancelled to avoid data loss.");
+			}
+		}
+
+		/// <summary>
+		/// Warn the user about potential schema issues.
+		/// </summary>
+		private void OutputSchemaIssues(FileInfo schemaUpgradeReportFile)
 		{
 			XElement deploymentReport = XElement.Load(schemaUpgradeReportFile.FullName);
 			XNamespace xmlns = "http://schemas.microsoft.com/sqlserver/dac/DeployReport/2012/02";
@@ -679,11 +759,13 @@ namespace Mercent.SqlServer.Management.Upgrade
 				.ToList();
 			if(dataIssues.Any())
 			{
-				ConsoleWriteLine(ConsoleColor.White, "\r\nReview issues for potential data loss:");
+				ConsoleWriteLine(ConsoleColor.White, "\r\nReview schema upgrade for potential data loss:");
 				foreach(var issue in dataIssues)
 				{
 					ConsoleWriteLine(ConsoleColor.Yellow, "\t{0}", (string)issue.Attribute("Value"));
 				}
+				if(syncMode && !PromptContinue())
+					throw new AbortException("Upgrade cancelled to avoid data loss.");
 			}
 		}
 
@@ -694,12 +776,17 @@ namespace Mercent.SqlServer.Management.Upgrade
 			{
 				ErrorWriteLine("Upgrade scripts failed to execute. Review the scripts that failed and add or correct manual steps in a SchemaPrep.sql, DataPrep.sql or AfterUpgrade.sql script.");
 			}
+			else if(syncMode)
+			{
+				if(hasUpgradeScript)
+					ConsoleWriteLine(ConsoleColor.White, "Successfully synchronized {0} database.", TargetDatabaseName);
+				else
+					ConsoleWriteLine(ConsoleColor.White, "No upgrade necessary.");
+			}
 			else if(upgradedTargetMatchesSource)
 			{
 				if(hasUpgradeScript)
-				{
 					ConsoleWriteLine(ConsoleColor.White, "Upgrade scripts successfully generated and verified.");
-				}
 				else
 					ConsoleWriteLine(ConsoleColor.White, "No upgrade necessary.");
 			}
@@ -721,6 +808,12 @@ namespace Mercent.SqlServer.Management.Upgrade
 		/// </returns>
 		private bool PromptContinue()
 		{
+			if(ForceContinue.HasValue)
+			{
+				if(ForceContinue.Value == false)
+					ConsoleWriteLine("\r\nAborting...");
+				return ForceContinue.Value;
+			}
 			bool response = PromptYesNo("Continue (y/n)? ");
 			if(response)
 				ConsoleWriteLine("\r\nContinuing...");
@@ -740,6 +833,11 @@ namespace Mercent.SqlServer.Management.Upgrade
 		/// </returns>
 		private bool PromptRetry()
 		{
+			// When the ForceContinue property has a value then return false.
+			// It doesnt' actually matter what the value is, we want to avoid
+			// a potential infinite loop.
+			if(ForceContinue.HasValue)
+				return false;
 			bool response = PromptYesNo("Retry (y/n)? ");
 			if(response)
 				ConsoleWriteLine("\r\nRetrying...");
@@ -760,13 +858,13 @@ namespace Mercent.SqlServer.Management.Upgrade
 		private bool PromptYesNo(string prompt)
 		{
 			// Since there are parallel tasks, ensure that we only prompt
-			// the user for on parallel task at a time.
+			// the user for one parallel task at a time.
 			lock(consoleLock)
 			{
 				// Clear any keys pressed before the prompt was displayed.
 				// Use a for loop instead of a while loop to avoid any chance of an infinite loop.
 				for(int i = 0; i < 1000 && Console.KeyAvailable; i++)
-					Console.Read();
+					Console.ReadKey(true);
 				while(true)
 				{
 					Console.Write(prompt);
@@ -777,7 +875,6 @@ namespace Mercent.SqlServer.Management.Upgrade
 					else if(ch == 'n' || ch == 'N')
 						return false;
 				}
-				Console.WriteLine();
 			}
 		}
 
@@ -786,6 +883,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			var scriptFiles = AddAndExecuteFiles(writer, "SchemaPrep*.sql");
 			return scriptFiles.Any();
 		}
+
 		private bool SchemaUpgrade(TextWriter upgradeWriter, SchemaUpgradeScripter schemaUpgradeScripter, FileInfo schemaUpgradeFile, FileInfo schemaUpgradeReportFile, bool dropObjectsNotInSource)
 		{
 			bool hasSchemaChanges;
@@ -816,6 +914,9 @@ namespace Mercent.SqlServer.Management.Upgrade
 					schemaUpgradeFile.Name,
 					stopwatch.Elapsed.ToString(elapsedTimeFormat)
 				);
+				// When in sync mode we want to show potential schema issues before executing the script.
+				if(syncMode)
+					OutputSchemaIssues(schemaUpgradeReportFile);
 				AddAndExecute(upgradeWriter, schemaUpgradeFile);
 			}
 			else
