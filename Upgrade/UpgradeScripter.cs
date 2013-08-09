@@ -48,6 +48,9 @@ namespace Mercent.SqlServer.Management.Upgrade
 		public bool? ForceContinue { get; set; }
 		public string OutputDirectory { get; set; }
 
+		public bool BeginTransaction { get; set; }
+		public bool CommitTransaction { get; set; }
+
 		/// <summary>
 		/// The file name to use for a single output file (optional).
 		/// </summary>
@@ -119,34 +122,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			writer.WriteLine("GO");
 
 			// Run the script against the target database now.
-			ConsoleWriteLine("Executing '{0}' script.", scriptFile.Name);
-			string logFileName = Path.ChangeExtension(scriptFile.Name, ".txt");
-			FileInfo logFile = new FileInfo(Path.Combine(OutputDirectory, "Log", logFileName));
-
-			var stopwatch = Stopwatch.StartNew();
-			int exitCode = ScriptUtility.RunSqlCmd(TargetServerName, TargetDatabaseName, scriptFile, logFile: logFile);
-			stopwatch.Stop();
-			if(exitCode != 0)
-			{
-				hasUpgradeScriptError = true;
-				string message = String.Format
-				(
-					"'{0}' script failed. Check the log file for error messages:\r\n{1}\r\n",
-					scriptFile.Name,
-					logFile.FullName
-				);
-				ErrorWriteLine();
-				ErrorWriteLine(message);
-				if(!PromptContinue())
-				{
-					throw new AbortException(message);
-				}
-			}
-			else if(stopwatch.ElapsedMilliseconds > 1000)
-			{
-				// If the script took more than 1 second, output the elapsed time.
-				ConsoleWriteLine("Finished executing '{0}' script ({1} elapsed).", scriptFile.Name, stopwatch.Elapsed.ToString(elapsedTimeFormat));
-			}
+			Execute(scriptFile, TargetServerName, TargetDatabaseName);
 		}
 
 		private IEnumerable<FileInfo> AddAndExecuteFiles(TextWriter writer, string filePattern)
@@ -191,6 +167,12 @@ namespace Mercent.SqlServer.Management.Upgrade
 				ConsoleWriteLine("\t{0}", actualDirectory.FullName);
 			}
 			return allIdentical;
+		}
+
+		private bool BeforeTransaction(TextWriter writer)
+		{
+			var scriptFiles = AddAndExecuteFiles(writer, "BeforeTransaction*.sql");
+			return scriptFiles.Any();
 		}
 
 		private void ConsoleWriteLine()
@@ -415,6 +397,38 @@ namespace Mercent.SqlServer.Management.Upgrade
 			}
 		}
 
+		private void Execute(FileInfo scriptFile, string serverName, string databaseName)
+		{
+			ConsoleWriteLine("Executing '{0}' script.", scriptFile.Name);
+			string logFileName = Path.ChangeExtension(scriptFile.Name, ".txt");
+			FileInfo logFile = new FileInfo(Path.Combine(OutputDirectory, "Log", logFileName));
+
+			var stopwatch = Stopwatch.StartNew();
+			int exitCode = ScriptUtility.RunSqlCmd(serverName, databaseName, scriptFile, logFile: logFile);
+			stopwatch.Stop();
+			if(exitCode != 0)
+			{
+				hasUpgradeScriptError = true;
+				string message = String.Format
+				(
+					"'{0}' script failed. Check the log file for error messages:\r\n{1}\r\n",
+					scriptFile.Name,
+					logFile.FullName
+				);
+				ErrorWriteLine();
+				ErrorWriteLine(message);
+				if(!PromptContinue())
+				{
+					throw new AbortException(message);
+				}
+			}
+			else if(stopwatch.ElapsedMilliseconds > 1000)
+			{
+				// If the script took more than 1 second, output the elapsed time.
+				ConsoleWriteLine("Finished executing '{0}' script ({1} elapsed).", scriptFile.Name, stopwatch.Elapsed.ToString(elapsedTimeFormat));
+			}
+		}
+
 		private DacPackage ExtractSource(SchemaUpgradeScripter scripter, FileInfo packageFile)
 		{
 			var stopwatch = Stopwatch.StartNew();
@@ -567,6 +581,10 @@ namespace Mercent.SqlServer.Management.Upgrade
 			TextWriter upgradeWriter = null;
 			try
 			{
+				// First run any ignore scripts against the source.
+				// This can be used to modify the source to effectively erase a difference between the source and target.
+				Ignore();
+
 				upgradeWriter = CreateText(upgradeFile);
 
 				// Ensure that errors will cause the script to be aborted.
@@ -574,6 +592,16 @@ namespace Mercent.SqlServer.Management.Upgrade
 				upgradeWriter.WriteLine("GO");
 				upgradeWriter.WriteLine(":on error exit");
 				upgradeWriter.WriteLine("GO");
+
+				BeforeTransaction(upgradeWriter);
+
+				if(BeginTransaction)
+				{
+					upgradeWriter.WriteLine("PRINT 'Beginning transaction.';");
+					upgradeWriter.WriteLine("GO");
+					upgradeWriter.WriteLine("BEGIN TRANSACTION;");
+					upgradeWriter.WriteLine("GO");
+				}
 
 				// Run schema prep scripts (if any) and add them to the upgrade script
 				// before comparing the schema.
@@ -637,6 +665,14 @@ namespace Mercent.SqlServer.Management.Upgrade
 					// Verify if the upgrade scripts succeed by checking if the database
 					// script files in the directories are identical.
 					upgradedTargetMatchesSource = AreDirectoriesIdentical(expectedDirectory, actualDirectory);
+				}
+
+				if(CommitTransaction)
+				{
+					upgradeWriter.WriteLine("PRINT 'Committing transaction.';");
+					upgradeWriter.WriteLine("GO");
+					upgradeWriter.WriteLine("COMMIT TRANSACTION;");
+					upgradeWriter.WriteLine("GO");
 				}
 			}
 			finally
@@ -714,6 +750,26 @@ namespace Mercent.SqlServer.Management.Upgrade
 			return Regex.Replace(unsafeFileName, invalidPattern, "_");
 		}
 
+		private bool Ignore()
+		{
+			string filePattern = "Ignore*.sql";
+			DirectoryInfo directory = GetOutputDirectory();
+
+			// Get the files, in sorted order.
+			var scriptFiles = directory.GetFiles(filePattern)
+				.OrderBy(f => f.Name)
+				.ToList();
+
+			// Execute each file against the source database.
+			// These files are not included in the upgrade script.
+			foreach(FileInfo scriptFile in scriptFiles)
+			{
+				Execute(scriptFile, SourceServerName, SourceDatabaseName);
+			}
+
+			return scriptFiles.Any();
+		}
+
 		/// <summary>
 		/// Warn the user about potential data issues.
 		/// </summary>
@@ -766,6 +822,30 @@ namespace Mercent.SqlServer.Management.Upgrade
 				}
 				if(syncMode && !PromptContinue())
 					throw new AbortException("Upgrade cancelled to avoid data loss.");
+			}
+
+			// Don't check for full text index operations when in sync mode.
+			if(syncMode)
+				return;
+
+			HashSet<string> fullTextTypes = new HashSet<string>
+			{
+				"SqlFullTextIndex",
+				"SqlFullTextCatalog"
+			};
+			var fullTextOperations = deploymentReport
+				.Elements(xmlns + "Operations")
+				.Elements(xmlns + "Operation")
+				.Elements(xmlns + "Item")
+				.Where(i => fullTextTypes.Contains((string)i.Attribute("Type")))
+				.ToList();
+			if(fullTextOperations.Any())
+			{
+				ConsoleWriteLine(ConsoleColor.White, "\r\nThe following full text operations cannot be performed in a transaction:");
+				foreach(var operation in fullTextOperations)
+				{
+					ConsoleWriteLine(ConsoleColor.Yellow, "\t{0} {1}", (string)operation.Parent.Attribute("Name"), (string)operation.Attribute("Value"));
+				}
 			}
 		}
 

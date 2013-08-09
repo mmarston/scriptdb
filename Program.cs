@@ -102,7 +102,7 @@ namespace Mercent.SqlServer.Management
 				"Usages:\r\n"
 					+ "\t{0} <ServerName> <DatabaseName> [<OutDirectory>] [-f|-n] [-SSDT]\r\n"
 					+ "\t{0} -Sync <ServerName> <SourceDatabase> <TargetDatabase> [<OutDirectory>] [-f|-n] [-SourceDir[ectory] <SourceDirectory>]\r\n"
-					+ "\t{0} -Upgrade <ServerName> <SourceDatabase> <TargetDatabase> [<OutDirectory>] [-f|-n] [-SingleFile <FileName>] [-SourceDir[ectory] <SourceDirectory>] [-TargetDir[ectory] <TargetDirectory>]",
+					+ "\t{0} -Upgrade <ServerName> <SourceDatabase> <TargetDatabase> [<OutDirectory>] [-f|-n] [-SingleFile <FileName>] [-SourceDir[ectory] <SourceDirectory>] [-TargetDir[ectory] <TargetDirectory>] [-BeginTran[saction] [-CommitTran[saction]]]",
 				program
 			);
 		}
@@ -275,6 +275,22 @@ namespace Mercent.SqlServer.Management
 						return 1;
 					}
 					scripter.ForceContinue = false;
+				}
+				else if
+				(
+					String.Equals(arg, "-BeginTran", StringComparison.OrdinalIgnoreCase)
+					|| String.Equals(arg, "-BeginTransaction", StringComparison.OrdinalIgnoreCase)
+				)
+				{
+					scripter.BeginTransaction = true;
+				}
+				else if
+				(
+					String.Equals(arg, "-CommitTran", StringComparison.OrdinalIgnoreCase)
+					|| String.Equals(arg, "-CommitTransaction", StringComparison.OrdinalIgnoreCase)
+				)
+				{
+					scripter.CommitTransaction = true;
 				}
 				else if(String.IsNullOrEmpty(scripter.OutputDirectory))
 				{
