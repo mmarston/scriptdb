@@ -59,7 +59,7 @@ namespace Mercent.SqlServer.Management
 		private ScriptUtility utility;
 
 		private static readonly string DBName = "$(DBNAME)";
-		private static readonly HashSet<string> knownExtensions = new HashSet<string>(new [] { ".sql", ".dat", ".fmt", ".udat", ".txt" }, StringComparer.OrdinalIgnoreCase);
+		private static readonly HashSet<string> knownExtensions = new HashSet<string>(new [] { ".sql", ".cab", ".dat", ".fmt", ".udat", ".txt" }, StringComparer.OrdinalIgnoreCase);
 		
 		private string serverName;
 		public string ServerName
@@ -87,6 +87,19 @@ namespace Mercent.SqlServer.Management
 		{
 			get { return encoding; }
 			set { encoding = value; }
+		}
+
+		private int maxUncompressedFileSize = 100 * 1024 * 1024; // 100 MB;
+		/// <summary>
+		/// Gets or sets the max uncompressed file size (in bytes).
+		/// </summary>
+		/// <remarks>
+		/// The default is 100 MB.
+		/// </remarks>
+		public int MaxUncompressedFileSize
+		{
+			get { return maxUncompressedFileSize; }
+			set { maxUncompressedFileSize = value; }
 		}
 
 		/// <summary>
@@ -189,6 +202,7 @@ namespace Mercent.SqlServer.Management
 
 		private void AddUnicodeNativeDataFile(string dataFile, string schema, string table)
 		{
+			dataFile = CheckCompressFile(dataFile);
 			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -N -k -E", FileScripter.DBName, schema, table, dataFile);
 			AddScriptFile(dataFile, command);
 		}
@@ -196,6 +210,7 @@ namespace Mercent.SqlServer.Management
 		private void AddUtf16DataFile(string dataFile, string schema, string table)
 		{
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
+			dataFile = CheckCompressFile(dataFile);
 			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -k -E -f \"{4}\"", FileScripter.DBName, schema, table, dataFile, formatFile);
 			AddScriptFile(dataFile, command);
 			AddScriptFile(formatFile, null);
@@ -204,6 +219,7 @@ namespace Mercent.SqlServer.Management
 		private void AddCodePageDataFile(string dataFile, string schema, string table, string codePage)
 		{
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
+			dataFile = CheckCompressFile(dataFile);
 			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -C {4} -k -E -f \"{5}\"", FileScripter.DBName, schema, table, dataFile, codePage, formatFile);
 			AddScriptFile(dataFile, command);
 			AddScriptFile(formatFile, null);
@@ -219,6 +235,50 @@ namespace Mercent.SqlServer.Management
 		{
 			object preferences = GetScriptingPreferences(options);
 			typeof(Database).InvokeMember("AddScriptPermission", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.InvokeMethod, null, db, new object[] { script, preferences });
+		}
+
+		private string CheckCompressFile(string dataFile)
+		{
+			string fullDataFile = Path.Combine(this.outputDirectory, dataFile);
+			FileInfo fileInfo = new FileInfo(fullDataFile);
+
+			// If the file doesn't exist or the size is less than the max uncompressed size
+			// then just return the original file.
+			if(!fileInfo.Exists || fileInfo.Length < MaxUncompressedFileSize)
+				return dataFile;
+
+			// Compress the file.
+			string compressedFile = Path.ChangeExtension(dataFile, ".cab");
+			string fullCompressedFile = Path.Combine(this.outputDirectory, compressedFile);
+			CompressFile(fullDataFile, fullCompressedFile);
+
+			// Delete the original file (we don't want it to be included as part of the source control).
+			fileInfo.Delete();
+
+			// Similarly, when uncompressing the data file we want to use a different extension
+			// that souce control can be configured to ignore.
+			string tempDataFile = Path.ChangeExtension(dataFile, ".tmp");
+
+			// Add a command to the SQL script to uncompress the file.
+			string uncompressCommand = String.Format("!!expand \"{0}\" \"{1}\"", compressedFile, tempDataFile);
+			AddScriptFile(compressedFile, uncompressCommand);
+			return tempDataFile;
+		}
+
+		private void CompressFile(string source, string destination)
+		{
+			string arguments = String.Format("\"{0}\" \"{1}\"", source, destination);
+			Process process = new Process
+			{
+				StartInfo = new ProcessStartInfo
+				{
+					FileName = "makecab.exe",
+					Arguments = arguments,
+					UseShellExecute = false,
+				}
+			};
+			process.Start();
+			process.WaitForExit();
 		}
 
 		private string ScriptAddToRole(DatabaseRole role, string memberOfRole, ScriptingOptions options)
@@ -1390,7 +1450,6 @@ namespace Mercent.SqlServer.Management
 				Directory.CreateDirectory(dataDir);
 
 			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".dat");
-			AddUnicodeNativeDataFile(relativeDataFile, table.Schema, table.Name);
 
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
 			OnProgressMessageReceived(relativeDataFile);
@@ -1409,6 +1468,10 @@ namespace Mercent.SqlServer.Management
 			);
 
 			RunBcp(bcpArguments);
+
+			// We have to wait to add the file until after the file is generated
+			// because adding the file will check the file size.
+			AddUnicodeNativeDataFile(relativeDataFile, table.Schema, table.Name);
 		}
 
 		/// <summary>
@@ -1425,7 +1488,6 @@ namespace Mercent.SqlServer.Management
 			// a text editor can be associated with the extension and so that source control
 			// systems can be configured to handle it appropriately.
 			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".udat");
-			AddUtf16DataFile(relativeDataFile, table.Schema, table.Name);
 
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
 			string tmpDataFile = dataFile + ".tmp";
@@ -1473,6 +1535,10 @@ namespace Mercent.SqlServer.Management
 
 			// Modify the format file so that it can be used by bcp to load data into the database.
 			ModifyInUtf16BcpFormatFile(formatFile);
+
+			// We have to wait to add the file until after the file is generated
+			// because adding the file will check the file size.
+			AddUtf16DataFile(relativeDataFile, table.Schema, table.Name);
 		}
 
 		/// <summary>
@@ -1491,7 +1557,6 @@ namespace Mercent.SqlServer.Management
 
 			// We use the ".txt" extension to treat it as a text file.
 			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".txt");
-			AddCodePageDataFile(relativeDataFile, table.Schema, table.Name, codePage);
 
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
@@ -1535,6 +1600,10 @@ namespace Mercent.SqlServer.Management
 
 			// Modify the format file so that it can be used by bcp to load data into the database.
 			ModifyInCodePageBcpFormatFile(formatFile);
+
+			// We have to wait to add the file until after the file is generated
+			// because adding the file will check the file size.
+			AddCodePageDataFile(relativeDataFile, table.Schema, table.Name, codePage);
 		}
 
 		/// <summary>
@@ -1553,7 +1622,6 @@ namespace Mercent.SqlServer.Management
 
 			// We use the ".txt" extension to treat it as a text file.
 			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".txt");
-			AddCodePageDataFile(relativeDataFile, table.Schema, table.Name, codePage);
 
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
@@ -1597,6 +1665,10 @@ namespace Mercent.SqlServer.Management
 
 			// Modify the format file so that it can be used by bcp to load data into the database.
 			ModifyInCodePageBcpFormatFile(formatFile);
+
+			// We have to wait to add the file until after the file is generated
+			// because adding the file will check the file size.
+			AddCodePageDataFile(relativeDataFile, table.Schema, table.Name, codePage);
 		}
 
 		private bool SkipBulkCopyColumn(Column column)
