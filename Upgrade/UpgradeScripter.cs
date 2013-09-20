@@ -465,7 +465,9 @@ namespace Mercent.SqlServer.Management.Upgrade
 				OutputDirectory = outputDirectory.FullName,
 				// We want the creation script generator to continue without ever
 				// prompting the user.
-				ForceContinue = true
+				ForceContinue = true,
+				// We don't want to generate any compressed files (this makes it easier to compare).
+				MaxUncompressedFileSize = Int32.MaxValue
 			};
 			int deleteAttempt = 0;
 			// Delete the directory if it already exists.
