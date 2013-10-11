@@ -267,6 +267,13 @@ namespace Mercent.SqlServer.Management
 
 		private void CompressFile(string source, string destination)
 		{
+			// Before compressing the file we set a bogus LastModified date.
+			// This is an attempt to consistently generate the same .cab file (byte for byte)
+			// as long as the uncompressed data file is the same.
+			DateTime defaultTime = new DateTime(2000, 01, 01);
+			File.SetCreationTime(source, defaultTime);
+			File.SetLastWriteTime(source, defaultTime);
+
 			string arguments = String.Format("\"{0}\" \"{1}\"", source, destination);
 			Process process = new Process
 			{
