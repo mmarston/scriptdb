@@ -13,6 +13,7 @@
 //   limitations under the License.
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -25,6 +26,7 @@ using Mercent.SqlServer.Management.IO;
 using Mercent.SqlServer.Management.Upgrade.Data;
 using Mercent.SqlServer.Management.Upgrade.Schema;
 using Microsoft.SqlServer.Dac;
+using Microsoft.SqlServer.Management.Smo;
 
 namespace Mercent.SqlServer.Management.Upgrade
 {
@@ -44,12 +46,11 @@ namespace Mercent.SqlServer.Management.Upgrade
 			Encoding = Encoding.Default;
 		}
 
+		public bool BeginTransaction { get; set; }
+		public bool CommitTransaction { get; set; }
 		public Encoding Encoding { get; set; }
 		public bool? ForceContinue { get; set; }
 		public string OutputDirectory { get; set; }
-
-		public bool BeginTransaction { get; set; }
-		public bool CommitTransaction { get; set; }
 
 		/// <summary>
 		/// The file name to use for a single output file (optional).
@@ -147,6 +148,60 @@ namespace Mercent.SqlServer.Management.Upgrade
 		{
 			var scriptFiles = AddAndExecuteFiles(writer, "AfterUpgrade*.sql");
 			return scriptFiles.Any();
+		}
+
+		private void AppendCreateUsers(FileInfo file)
+		{
+			using(TextWriter writer = new StreamWriter(file.FullName, true, Encoding.Default))
+			{
+				Server sourceServer = new Server(SourceServerName);
+				Server targetServer = new Server(TargetServerName);
+				Database sourceDatabase = sourceServer.Databases[SourceDatabaseName];
+				Database targetDatabase = targetServer.Databases[TargetDatabaseName];
+
+				ScriptingOptions options = new ScriptingOptions
+				{
+					IncludeDatabaseRoleMemberships = true,
+				};
+
+				// Loop through all the users in the target database.
+				foreach(User user in targetDatabase.Users)
+				{
+					// Skip system objects.
+					if(user.IsSystemObject)
+						continue;
+
+					// Loop through the roles that the user is a member of.
+					// I believe this also includes indirect role membership.
+					// For example the user is member of role A and role A is member of role B.
+					// Then role B is included in the results of EnumRoles().
+					foreach(string roleName in user.EnumRoles())
+					{
+						// Check if the role exists in the source database.
+						if(!sourceDatabase.Roles.Contains(roleName))
+						{
+							// If the role does not exist in the source database
+							// then the role will be dropped.
+							// Remove the user from the role now before scripting out the user.
+							// Otherwise the script will try to add the user back to the role
+							// but the role won't exist so it will fail.
+							DatabaseRole targetRole = targetDatabase.Roles[roleName];
+							targetRole.DropMember(user.Name);
+						}
+					}
+
+					// Check if the user's default schema exists in the source database.
+					// If not, the schema will be dropped. So change the default schema to 'dbo'.
+					if(!sourceDatabase.Schemas.Contains(user.DefaultSchema))
+						user.DefaultSchema = "dbo";
+
+					// Script out the user.
+					StringCollection script = user.Script(options);
+
+					// Add the user script to the file.
+					WriteBatches(writer, script);
+				}
+			}
 		}
 
 		private bool AreDirectoriesIdentical(DirectoryInfo expectedDirectory, DirectoryInfo actualDirectory)
@@ -359,6 +414,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			}
 			return hasDataChanges;
 		}
+
 		private void ErrorWriteLine()
 		{
 			lock(consoleLock)
@@ -998,7 +1054,14 @@ namespace Mercent.SqlServer.Management.Upgrade
 				);
 				// When in sync mode we want to show potential schema issues before executing the script.
 				if(syncMode)
+				{
 					OutputSchemaIssues(schemaUpgradeReportFile);
+
+					// After the issues have been reviewed append users and user role membership
+					// to the script. Users will be dropped by the schema upgrade script
+					// so we need to add them back.
+					AppendCreateUsers(schemaUpgradeFile);
+				}
 				AddAndExecute(upgradeWriter, schemaUpgradeFile);
 			}
 			else
@@ -1075,6 +1138,15 @@ namespace Mercent.SqlServer.Management.Upgrade
 			// Path.Combine(OutputDirectory, "somefile") will work with empty string but not null.
 			if(this.OutputDirectory == null)
 				this.OutputDirectory = String.Empty;
+		}
+
+		private void WriteBatches(TextWriter writer, StringCollection script)
+		{
+			foreach(string batch in script)
+			{
+				writer.WriteLine(batch.Trim());
+				writer.WriteLine("GO");
+			}
 		}
 	}
 }
