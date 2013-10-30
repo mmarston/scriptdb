@@ -114,6 +114,60 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 				// (Try to script a primary table before a table that references it using a foreign key).
 				ResolveOrder();
 
+				// After resolving the order we still have to do the operations in the correct order.
+				// For a single table we delete, update, and insert, in that order.
+				// This allows us to properly handle tables that have unique indexes and contraints
+				// (different than the primary key). As an example see the unit test
+				// DataUpgradeScripterTest.DeleteUpdateInsertTest.
+
+				// The chart below shows the proper order of operations (Insert/Update/Delete) for two tables,
+				// A and B where A has a foreign key to B (such that A depends on B). An update (U) in table B
+				// is only significant if it is an update to an unique key (not the key used to compare the data) referenced
+				// by table A. If it were an update to the primary key then it would appear as a delete and an insert.
+
+				// In this chart we assume the source complies with the foreign key constraints. For example, in the third
+				// row of the chart we need to insert into A and delete from B. At least with regard to tables A
+				// and B, it is OK to delete rows from B first because rows to insert into A don't reference them
+				// (otherwise the source would be in violation of the foreign key constraints).
+
+				// The Order column shows the proper order of operations.
+				// The first row shows "I(B),I(A)" which means insert into B first then insert into A.
+
+				// A	B	Order
+				// =	=	=====
+				// I	I	I(B),I(A)
+				// I	U	U(B),I(A)
+				// I	D	* Order doesn't matter but lets use D(B),I(A) (delete first)
+				// U	I	I(B),U(A)
+				// U	U	! Disable foreign key - If we update B first it may fail because A may reference old value.
+				//		  But if we update A first it may fail because it may reference a new value not yet in B.
+				// U	D	D(B),U(A)
+				// D	I	* Order doesn't matter but lets use D(A),I(B) (delete first)
+				// D	U	D(A),U(B)
+				// D	D	D(A),D(B) - delete in reverse dependency order (delete from A then B)
+
+				// The issue gets more complicated when we have multiple operations (chart below).
+
+				// A	B	Order
+				// =	=	=====
+				// I	IU	U(B),I(B),I(A)
+				// I	ID	D(B),I(B),I(A)
+				// I	UD	D(B),U(B),I(A)
+				// I	IUD	D(B),U(B),I(B),I(A)
+				// U	IU	! Disable foreign key - More complex scenario of update to each (see chart above).
+				// U	ID	I(B),U(A),D(B) - Because this is reverse of other scenarios (delete is normally first) we will actually disable foreign keys.
+				// U	UD	U(B),U(A),D(B) - Because this is reverse of other scenarios (delete is normally first) we will actually disable foreign keys.
+				// U	IUD	U(B),I(B),U(A),D(B) - Because this is reverse of other scenarios (delete is normally first) we will actually disable foreign keys.
+				// D	IU	D(A),U(B),I(B)
+				// D	ID	D(A),D(B),I(B)
+				// D	UD	D(A),D(B),U(B)
+				// D	IUD	D(A),D(B),U(B),I(B)
+
+				// In the scenarios above where A is updated we choose to disable the foreign key.
+				// To avoid disabling the foreign key we could have deleted from B last but then we may have trouble
+				// in table B because for a single table we need to delete, update, insert, in that order
+				// (see the comments about a single table at the beginning of this section).
+
 				DisableForeignKeys();
 
 				DisableIndexes();
@@ -1217,6 +1271,10 @@ WHERE EXISTS
 			int counter = 0;
 			foreach(string statement in statements)
 			{
+				// If this is not the first statement in a batch then add
+				// a blank line.
+				if(counter % 1000 != 0)
+					writer.WriteLine();
 				writer.WriteLine(statement);
 				// End the batch with a GO statement every 1000 statements.
 				counter++;

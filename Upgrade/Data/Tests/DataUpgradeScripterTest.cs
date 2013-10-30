@@ -22,7 +22,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace Mercent.SqlServer.Management.Upgrade.Data.Tests
 {
 	[TestClass]
-	public class DataUpgraderTest
+	public class DataUpgradeScripterTest
 	{
 		static string SourceDatabaseName;
 		static string TargetDatabaseName;
@@ -201,6 +201,64 @@ GO
 			int noCheckCount = Regex.Matches(actualScript, @"\bNOCHECK\b").Count;
 			Assert.AreEqual(1, noCheckCount, "The script should only need to disable one foreign key in this test scenario.");
 		}
+
+		/// <summary>
+		/// When a referenced table has inserts and deletes and the foreign key column has updates then we disable the foreign key.
+		/// </summary>
+		/// <remarks>
+		/// This test covers a specific scenario we actually encountered with our Merchant database.
+		/// The actual scenario involved the dbo.Marketplace and dbo.MarketplaceAdSpendType tables.
+		/// The dbo.Marketplace table has a MarketplaceName primary key.
+		/// The dbo.MarketplaceAdSpendType table has a composite key on (MarketplaceName, AdSpendType).
+		/// This table lists all AdSpendType options that are available for each specific MarketplaceName.
+		/// The dbo.Marketplace table has a DefaultAdSpendType column. This value must be one of the
+		/// AdSpendType options available for the MarketplaceName in dbo.MarketplaceAdSpend.
+		/// The dbo.Marketplace table has a foreign key (MarketplaceName, DefaultAdSpendType) that references
+		/// (MarketplaceName, AdSpendType) in dbo.MarketplaceAdSpend.
+		/// The issue is when the DefaultAdSpendType changes and the old value was removed from
+		/// MarketplaceAdSpendType and the new value is inserted into MarketplaceAdSpendType.
+		/// We always do deletes before updates and inserts. But in this scenario the delete from
+		/// MarketplaceAdSpendType violates the foreign key because we haven't updated DefaultAdSpendType.
+		/// In this unit test we set up a similar scenario with TableX and TableXOption.
+		/// </remarks>
+		[TestMethod]
+		public void DependencyOrderDeleteUpdateInsertTest()
+		{
+			// In this example, Table X has a foreign key to XOption and XOption has a foreign key to X.
+			// The available options for X1 changed and we need to insert a third option (X1, O3) from XOption,
+			// delete the first option (X1, 01) from XOption, and update the current option to 03, the new option.
+			string[] script1 = { CreateTablesXOption, InsertTablesXOptions_2_3 };
+			string[] script2 = { CreateTablesXOption, InsertTablesXOptions_1_2 };
+
+			string expected =
+@"PRINT 'Disabling foreign keys.';
+GO
+ALTER TABLE [dbo].[TableX] NOCHECK CONSTRAINT [FK_TableX_TableXOption];
+GO
+PRINT 'Deleting 1 row(s) from [dbo].[TableXOption].';
+GO
+DELETE FROM [dbo].[TableXOption] WHERE [XKey] = 'X1'
+	AND [OptionKey] = 'O1';
+GO
+PRINT 'Inserting 1 row(s) into [dbo].[TableXOption].';
+GO
+INSERT INTO [dbo].[TableXOption] ([XKey], [OptionKey])
+VALUES ('X1', 'O3');
+GO
+PRINT 'Updating 1 row(s) in [dbo].[TableX].';
+GO
+UPDATE [dbo].[TableX]
+SET [CurrentOptionKey] = 'O3'
+WHERE [XKey] = 'X1';
+GO
+PRINT 'Enabling foreign key [FK_TableX_TableXOption] on [dbo].[TableX].';
+GO
+ALTER TABLE [dbo].[TableX] WITH CHECK CHECK CONSTRAINT [FK_TableX_TableXOption];
+GO
+";
+			ExecuteTest(script1, script2, expected, true);
+		}
+
 		/// <summary>
 		/// Ensure rows are deleted in dependency order.
 		/// </summary>
@@ -897,6 +955,22 @@ CREATE TABLE TableC
 
 ALTER TABLE TableA ADD CONSTRAINT FK_TableA_TableC FOREIGN KEY (CKey) REFERENCES TableC(CKey);";
 
+		readonly string CreateTablesXOption =
+@"CREATE TABLE TableX
+(
+	XKey char(2) not null PRIMARY KEY,
+	CurrentOptionKey char(2)
+);
+
+CREATE TABLE TableXOption
+(
+	XKey char(2) not null,
+	OptionKey char(2) not null,
+	PRIMARY KEY (XKey, OptionKey)
+);
+
+ALTER TABLE TableX ADD CONSTRAINT FK_TableX_TableXOption FOREIGN KEY (XKey, CurrentOptionKey) REFERENCES TableXOption(XKey, OptionKey);";
+
 		readonly string CreateTestTable1 =
 @"CREATE TABLE TestTable1
 (
@@ -1000,6 +1074,33 @@ VALUES('A1', 'C1');
 UPDATE TableB
 SET AKey = 'A1'
 WHERE BKey = 'B1';";
+
+		readonly string InsertTablesXOptions_1_2 =
+@"
+INSERT INTO TableX(XKey)
+VALUES('X1');
+
+INSERT INTO TableXOption(XKey, OptionKey) VALUES
+('X1', 'O1'),
+('X1', 'O2');
+
+UPDATE TableX
+SET CurrentOptionKey = 'O1'
+WHERE XKey = 'X1';";
+
+		readonly string InsertTablesXOptions_2_3 =
+@"
+INSERT INTO TableX(XKey)
+VALUES('X1');
+
+INSERT INTO TableXOption(XKey, OptionKey) VALUES
+('X1', 'O2'),
+('X1', 'O3');
+
+UPDATE TableX
+SET CurrentOptionKey = 'O3'
+WHERE XKey = 'X1';";
+
 		readonly string InsertTestTable1_identity_one =
 @"INSERT INTO TestTable1(Value)
 VALUES('one');";

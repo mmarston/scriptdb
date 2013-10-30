@@ -29,13 +29,62 @@ namespace Mercent.SqlServer.Management.Upgrade.Data
 		{
 			get
 			{
-				// If the dependency order was correctly resolved
-				// (the primary table comes before the foreign table),
-				// then the foreign key does not need to be disabled.
-				if(PrimaryTable.DependencyIndex < ForeignTable.DependencyIndex)
-					return false;
-				else
+				// If the dependency order was incorrectly resolved
+				// (the primary table comes after the foreign table),
+				// then the foreign key needs to be disabled.
+				if(PrimaryTable.DependencyIndex >= ForeignTable.DependencyIndex)
 					return true;
+
+				// If any foreign key columns were updated and either any referenced columns were updated
+				// or the primary table has deleted rows then disable the foreign key.
+				return AnyForeignKeyColumnsUpdated &&
+				(
+					AnyReferencedColumnsUpdated || PrimaryTable.DeleteStatements.Count > 0
+				);
+			}
+		}
+
+		private bool AnyForeignKeyColumnsUpdated
+		{
+			get
+			{
+				// If no rows were updated in the foreign table then return false.
+				if(ForeignTable.UpdateStatements.Count == 0)
+					return false;
+
+				// Loop through the foreign key columns and return true
+				// if any of them have an updated row count greater than zero.
+				foreach(ForeignKeyColumn column in ForeignKey.Columns)
+				{
+					ColumnInfo columnInfo = ForeignTable.Columns.Get(column.Name);
+					if(columnInfo.UpdatedRowCount > 0)
+						return true;
+				}
+
+				// If we reached here then no foreign key columns were updated.
+				return false;
+			}
+		}
+
+		private bool AnyReferencedColumnsUpdated
+		{
+			get
+			{
+				// If no rows were updated in the primary (referenced) table then return false.
+				if(PrimaryTable.UpdateStatements.Count == 0)
+					return false;
+
+				// Loop through the foreign key columns and return true
+				// if any of the referenced columns have an updated row count greater than zero.
+				foreach(ForeignKeyColumn column in ForeignKey.Columns)
+				{
+					ColumnInfo columnInfo = PrimaryTable.Columns.Get(column.ReferencedColumn);
+					if(columnInfo.UpdatedRowCount > 0)
+						return true;
+				}
+
+				// If we reached here then no referenced columns were updated.
+				return false;
 			}
 		}
 	}
