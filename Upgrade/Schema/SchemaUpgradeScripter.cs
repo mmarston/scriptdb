@@ -31,6 +31,8 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 		public DacPackage TargetPackage { get; set; }
 		public string TargetServerName { get; set; }
 
+		public bool SyncMode { get; set; }
+
 		/// <summary>
 		/// Extracts a <see cref="DacPackage"/> from the source database and returns it.
 		/// </summary>
@@ -209,7 +211,7 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 		/// achieve source-code level equivalence between the source and target
 		/// (script files generate from the databases should be identical).
 		/// </remarks>
-		private static DacDeployOptions GetDeployOptions()
+		private DacDeployOptions GetDeployOptions()
 		{
 			return new DacDeployOptions
 			{
@@ -222,6 +224,7 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 				GenerateSmartDefaults = true,
 				IgnoreAnsiNulls = false,
 				IgnoreKeywordCasing = false,
+				IgnorePartitionSchemes = this.SyncMode,
 				IgnoreQuotedIdentifiers = false,
 				IgnoreSemicolonBetweenStatements = false,
 				IgnoreWhitespace = false,

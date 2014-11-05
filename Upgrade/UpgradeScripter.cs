@@ -162,13 +162,14 @@ namespace Mercent.SqlServer.Management.Upgrade
 				ScriptingOptions options = new ScriptingOptions
 				{
 					IncludeDatabaseRoleMemberships = true,
+					IncludeIfNotExists = true
 				};
 
 				// Loop through all the users in the target database.
 				foreach(User user in targetDatabase.Users)
 				{
-					// Skip system objects.
-					if(user.IsSystemObject)
+					// Skip system objects or users that exist in the source database.
+					if(user.IsSystemObject || sourceDatabase.Users.Contains(user.Name))
 						continue;
 
 					// Loop through the roles that the user is a member of.
@@ -616,7 +617,8 @@ namespace Mercent.SqlServer.Management.Upgrade
 				SourceServerName = SourceServerName,
 				SourceDatabaseName = SourceDatabaseName,
 				TargetServerName = TargetServerName,
-				TargetDatabaseName = TargetDatabaseName
+				TargetDatabaseName = TargetDatabaseName,
+				SyncMode = syncMode
 			};
 
 			if(!String.IsNullOrWhiteSpace(OutputDirectory) && !Directory.Exists(OutputDirectory))
