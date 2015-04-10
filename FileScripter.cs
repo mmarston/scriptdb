@@ -1254,34 +1254,37 @@ namespace Mercent.SqlServer.Management
 							}
 							else
 							{
-								// Otherwise use BCP with a custom JSON-like text format.
-								// This format is designed to allow the file to be viewed in a text editor,
-								// diff'd and merged.
-								// For tables that have more than a few rows, this method runs faster than INSERT statements
-								// when deploying the database (see the ScriptTableData method, which is no longer used).
+								// Otherwise use INSERT statements.
+								// This format is can be viewed in a text editor, diff'd and merged and can handle the
+								// variant data type but is more verbose (leading to larger files).
 								ScriptTableData(table);
 							}
 						}
-						else
+						else if(table.RowCount > 50000)
 						{
 							// If the table has more than 50,000 rows then we will use BCP with a compact text format.
 							// We used to use Unicode native format (see BulkCopyTableDataUnicodeNative method) but
 							// the Unicode native format is a binary file that doesn't diff or merge well.
 							// The compact text format is larger than the binary format but is more compact than the
 							// full JSON-like text format used for tables with fewer rows.
-							if(table.RowCount > 50000)
-							{
-								BulkCopyTableDataCompactCodePage(table, "1252");
-							}
-							else
-							{
-								// Otherwise use BCP with a custom JSON-like text format.
-								// This format is designed to allow the file to be viewed in a text editor,
-								// diff'd and merged.
-								// For tables that have more than a few rows, this method runs faster than INSERT statements
-								// when deploying the database (see the ScriptTableData method, which is no longer used).
-								BulkCopyTableDataCodePage(table, "1252");
-							}
+							BulkCopyTableDataCompactCodePage(table, "1252");
+						}
+						else if(table.HasAnyXmlColumns())
+						{
+							// If the table has any XML columns then we prefer INSERT statements over the custom JSON-
+							// like BCP format. When we script out INSERT statements we can nicely format the XML
+							// with newlines and indents rather than having it all on one line. This allows the XML
+							// to be more easily viewed, edited, diff'd and merged.
+							ScriptTableData(table);
+						}
+						else
+						{
+							// Otherwise use BCP with a custom JSON-like text format.
+							// This format is designed to allow the file to be viewed in a text editor,
+							// diff'd and merged.
+							// For tables that have more than a few rows, this method runs faster than INSERT statements
+							// when deploying the database (see the ScriptTableData method).
+							BulkCopyTableDataCodePage(table, "1252");
 						}
 					}
 

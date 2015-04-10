@@ -31,6 +31,16 @@ namespace Mercent.SqlServer.Management
 				.Any(c => c.DataType.SqlDataType == SqlDataType.Variant);
 		}
 
+		public static bool HasAnyXmlColumns(this Table table)
+		{
+			if(table == null)
+				throw new ArgumentNullException("table");
+
+			return table.Columns
+				.Cast<Column>()
+				.Any(c => c.DataType.SqlDataType == SqlDataType.Xml);
+		}
+
 		public static bool HasUniqueIndex(this Table table)
 		{
 			if(table == null)
