@@ -150,9 +150,10 @@ namespace Mercent.SqlServer.Management.Upgrade
 			return scriptFiles.Any();
 		}
 
-		private void AppendCreateUsers(FileInfo file)
+		private bool ScriptRecreateUsers(FileInfo file)
 		{
-			using(TextWriter writer = new StreamWriter(file.FullName, true, Encoding.Default))
+			bool result = false;
+			using(TextWriter writer = CreateText(file))
 			{
 				Server sourceServer = new Server(SourceServerName);
 				Server targetServer = new Server(TargetServerName);
@@ -171,6 +172,8 @@ namespace Mercent.SqlServer.Management.Upgrade
 					// Skip system objects or users that exist in the source database.
 					if(user.IsSystemObject || sourceDatabase.Users.Contains(user.Name))
 						continue;
+
+					result = true;
 
 					// Loop through the roles that the user is a member of.
 					// I believe this also includes indirect role membership.
@@ -203,6 +206,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 					WriteBatches(writer, script);
 				}
 			}
+			return result;
 		}
 
 		private bool AreDirectoriesIdentical(DirectoryInfo expectedDirectory, DirectoryInfo actualDirectory)
@@ -1062,9 +1066,24 @@ namespace Mercent.SqlServer.Management.Upgrade
 					// After the issues have been reviewed append users and user role membership
 					// to the script. Users will be dropped by the schema upgrade script
 					// so we need to add them back.
-					AppendCreateUsers(schemaUpgradeFile);
+					FileInfo recreateUsersFile = new FileInfo(Path.Combine(OutputDirectory, "Temp", "RecreateUsers.sql"));
+					bool recreateUsers = ScriptRecreateUsers(recreateUsersFile);
+					try
+					{
+						AddAndExecute(upgradeWriter, schemaUpgradeFile);
+					}
+					finally
+					{
+						// We want to ensure that we recreate the users even if an error occured when upgrading the schema.
+						if(recreateUsers)
+							Execute(recreateUsersFile, TargetServerName, TargetDatabaseName);
+						recreateUsersFile.Delete();
+					}
 				}
-				AddAndExecute(upgradeWriter, schemaUpgradeFile);
+				else
+				{
+					AddAndExecute(upgradeWriter, schemaUpgradeFile);
+				}
 			}
 			else
 			{
