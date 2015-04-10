@@ -117,7 +117,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 			if(String.IsNullOrEmpty(SingleFileName))
 				writer.WriteLine(":r \"{0}\"", scriptFile.Name);
 			else
-				writer.WriteLine(File.ReadAllText(scriptFile.FullName, Encoding.Default));
+				writer.WriteLine(File.ReadAllText(scriptFile.FullName, this.Encoding));
 			writer.WriteLine("GO");
 			writer.WriteLine("PRINT '''{0}'' complete.';", scriptFile.Name);
 			writer.WriteLine("GO");
@@ -347,7 +347,7 @@ namespace Mercent.SqlServer.Management.Upgrade
 		/// </remarks>
 		private TextWriter CreateText(FileInfo file)
 		{
-			return new StreamWriter(file.FullName, false, Encoding.Default);
+			return new StreamWriter(file.FullName, false, this.Encoding);
 		}
 
 		private XmlWriter CreateXml(FileInfo file)
