@@ -274,7 +274,7 @@ namespace Mercent.SqlServer.Management
 			// rather than using the offset appropriate for the file creation date
 			// (i.e. is daylight savings in effect now vs then).
 			TimeSpan currentOffset = DateTimeOffset.Now.Offset;
-			DateTime defaultTime = new DateTimeOffset(2000, 01, 01, 00, 00, 00, currentOffset).UtcDateTime;
+			DateTime defaultTime = new DateTimeOffset(2000, 01, 01, 01, 00, 00, currentOffset).UtcDateTime;
 			File.SetCreationTime(source, defaultTime);
 			File.SetLastWriteTime(source, defaultTime);
 
