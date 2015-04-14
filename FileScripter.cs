@@ -270,7 +270,11 @@ namespace Mercent.SqlServer.Management
 			// Before compressing the file we set a bogus LastModified date.
 			// This is an attempt to consistently generate the same .cab file (byte for byte)
 			// as long as the uncompressed data file is the same.
-			DateTime defaultTime = new DateTime(2000, 01, 01);
+			// It also appears that MakeCab.exe uses the current offset in some date/time calculations
+			// rather than using the offset appropriate for the file creation date
+			// (i.e. is daylight savings in effect now vs then).
+			TimeSpan currentOffset = DateTimeOffset.Now.Offset;
+			DateTime defaultTime = new DateTimeOffset(2000, 01, 01, 00, 00, 00, currentOffset).UtcDateTime;
 			File.SetCreationTime(source, defaultTime);
 			File.SetLastWriteTime(source, defaultTime);
 
