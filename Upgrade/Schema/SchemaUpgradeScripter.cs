@@ -218,6 +218,8 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 				AllowDropBlockingAssemblies = true,
 				BlockOnPossibleDataLoss = false,
 				CommentOutSetVarDeclarations = true,
+				//ExcludeObjectTypes = new [] { ObjectType.Users },
+				//DoNotDropObjectTypes = new [] { ObjectType.Users },
 				DropObjectsNotInSource = true,
 				DropPermissionsNotInSource = true,
 				DropRoleMembersNotInSource = true,
