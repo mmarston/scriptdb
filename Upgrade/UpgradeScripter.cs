@@ -712,13 +712,20 @@ namespace Mercent.SqlServer.Management.Upgrade
 				{
 					// Generate the final schema upgrade script.
 					// We can skip this if there are no other upgrade scripts.
-					if(hasUpgradeScript && !syncMode)
-					{
+					if(hasUpgradeScript)
 						SchemaUpgradeFinal(upgradeWriter, schemaUpgradeScripter, schemaFinalFile);
-					}
 
 					// Generate a clean set of scripts for the source database (the "expected" result) in parallel.
 					Task generateSourceCreateScriptsTask = Task.Run(() => GenerateSourceCreateScripts(expectedDirectory));
+
+					// We have experienced some intermittent exceptions when running generate scripts concurrently.
+					// It surprises me, but there appears to be some threading issues in the SMO library
+					// even though we are using separate instances of the Server and Database classes.
+					// Most of the issues occur during prefetch. We can minimize the frequency of these issues
+					// by waiting for 10 seconds before starting to generate scripts for the target database.
+					// Note that we call Wait on the task instead of just delaying or sleeping for 10 seconds
+					// to avoid extra delay if the task finishes in less than 10 seconds.
+					generateSourceCreateScriptsTask.Wait(TimeSpan.FromSeconds(10));
 
 					// Generate a set of scripts for the upgraded target database (the "actual" result).
 					GenerateTargetCreateScripts(actualDirectory);
