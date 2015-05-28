@@ -366,6 +366,12 @@ namespace Mercent.SqlServer.Management
 					// For a user defined type, get the base data type as string
 					DataType baseDataType = GetBaseDataType(dataType);
 					return GetDataTypeAsString(baseDataType);
+				case SqlDataType.UserDefinedType:
+					// For a CLR type, also include the schema.
+					sb.Append(MakeSqlBracket(dataType.Schema));
+					sb.Append('.');
+					sb.Append(MakeSqlBracket(dataType.Name));
+					break;
 				case SqlDataType.Xml:
 					sb.Append("[xml]");
 					if(!String.IsNullOrEmpty(dataType.Name))
