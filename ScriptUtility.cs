@@ -384,6 +384,81 @@ namespace Mercent.SqlServer.Management
 			return sb.ToString();
 		}
 
+		/// <summary>
+		/// Gets a non-null literal value that can be cast to the specified data type.
+		/// </summary>
+		/// <remarks>
+		/// The results of this method are used to create non-nullable expressions in the stubs (aka "headers")
+		/// for views and table-valued functions. Note that we don't attempt to make the literal value very specific
+		/// to the data type, rather we just need a value that can be cast to the specified type.
+		/// For example, we return "0x" for date and datetime, rather than "'1900-01-01'" and "'1900-01-01 00:00:00.000'").
+		/// This is because CAST(0x AS date) works just as well as CAST('1900-01-01' AS date).
+		/// Note that we return null for CLR UDTs and other types this method doesn't currently support
+		/// since we don't know what value to use for them.
+		/// </remarks>
+		public string GetNonNullLiteral(DataType dataType)
+		{
+			switch(dataType.SqlDataType)
+			{
+				case SqlDataType.BigInt:
+				case SqlDataType.Bit:
+				case SqlDataType.Decimal:
+				case SqlDataType.Float:
+				case SqlDataType.Int:
+				case SqlDataType.Money:
+				case SqlDataType.Numeric:
+				case SqlDataType.Real:
+				case SqlDataType.SmallInt:
+				case SqlDataType.SmallMoney:
+				case SqlDataType.TinyInt:
+					// For number-related types, use literal 0.
+					return "0";
+				case SqlDataType.Binary:
+				case SqlDataType.Date:
+				case SqlDataType.DateTime:
+				case SqlDataType.DateTime2:
+				case SqlDataType.DateTimeOffset:
+				case SqlDataType.HierarchyId:
+				case SqlDataType.Image:
+				case SqlDataType.SmallDateTime:
+				case SqlDataType.Time:
+				case SqlDataType.Timestamp:
+				case SqlDataType.UniqueIdentifier:
+				case SqlDataType.VarBinary:
+				case SqlDataType.VarBinaryMax:
+					// These types can be cast from an empty binary literal.
+					return "0x";
+				case SqlDataType.Char:
+				case SqlDataType.NChar:
+				case SqlDataType.NText:
+				case SqlDataType.NVarChar:
+				case SqlDataType.NVarCharMax:
+				case SqlDataType.SysName:
+				case SqlDataType.Text:
+				case SqlDataType.VarChar:
+				case SqlDataType.VarCharMax:
+				case SqlDataType.Variant:
+				case SqlDataType.Xml:
+					// These types can be cast from an empty literal string.
+					return "''";
+				case SqlDataType.Geography:
+				case SqlDataType.Geometry:
+					return "'POINT(0, 0)'";
+				case SqlDataType.None:
+				case SqlDataType.UserDefinedTableType:
+				case SqlDataType.UserDefinedType:
+					// We don't have a literal value to return for these types.
+					return null;
+				case SqlDataType.UserDefinedDataType:
+					// For a user defined type, get the non-nullable value for the base data type.
+					DataType baseDataType = GetBaseDataType(dataType);
+					return GetNonNullLiteral(baseDataType);
+				default:
+					// A new value has been added to the enum and the code above hasn't been updated to handle it.
+					return null;
+			}
+		}
+
 		public string GetSqlVariantLiteral(object sqlValue, SqlString baseType, SqlInt32 precision, SqlInt32 scale, SqlString collation, SqlInt32 maxLength)
 		{
 			if(DBNull.Value == sqlValue || (sqlValue is INullable && ((INullable)sqlValue).IsNull))

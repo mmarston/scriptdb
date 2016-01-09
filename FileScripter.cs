@@ -237,6 +237,32 @@ namespace Mercent.SqlServer.Management
 			typeof(Database).InvokeMember("AddScriptPermission", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.InvokeMethod, null, db, new object[] { script, preferences });
 		}
 
+		private void AppendHeaderColumnExpression(TextWriter writer, Column column)
+		{
+			string dataTypeAsString = GetDataTypeAsString(column.DataType);
+			string nonNullValue = GetNonNullLiteral(column.DataType);
+			if(column.Nullable || nonNullValue == null)
+				writer.Write("CAST(NULL AS {0})", dataTypeAsString);
+			else
+				writer.Write("ISNULL(CAST({0} AS {1}), {0})", nonNullValue, dataTypeAsString);
+			if(!String.IsNullOrEmpty(column.Collation))
+				writer.Write(" COLLATE {0}", column.Collation);
+			writer.Write(" AS {0}", MakeSqlBracket(column.Name));
+		}
+
+		private void AppendHeaderColumnExpressions(TextWriter writer, ColumnCollection columns, string delimiter = ",\r\n\t")
+		{
+			string innerDelimiter = null;
+			foreach(Column column in columns)
+			{
+				if(innerDelimiter == null)
+					innerDelimiter = delimiter;
+				else
+					writer.Write(innerDelimiter);
+				AppendHeaderColumnExpression(writer, column);
+			}
+		}
+
 		private string CheckCompressFile(string dataFile)
 		{
 			string fullDataFile = Path.Combine(this.outputDirectory, dataFile);
@@ -2083,19 +2109,7 @@ namespace Mercent.SqlServer.Management
 				{
 					writer.WriteLine(view.TextHeader.Trim());
 					writer.Write("SELECT\r\n\t");
-					string delimiter = null;
-					foreach(Column column in view.Columns)
-					{
-						if(delimiter == null)
-							delimiter = ",\r\n\t";
-						else
-							writer.Write(delimiter);
-						string dataTypeAsString = GetDataTypeAsString(column.DataType);
-						if(String.IsNullOrEmpty(column.Collation))
-							writer.Write("CAST(NULL AS {0}) AS {1}", dataTypeAsString, MakeSqlBracket(column.Name));
-						else
-							writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, MakeSqlBracket(column.Name));
-					}
+					AppendHeaderColumnExpressions(writer, view.Columns);
 					writer.WriteLine(";");
 					writer.WriteLine("GO");
 				}
@@ -2496,19 +2510,7 @@ namespace Mercent.SqlServer.Management
 					{
 						case UserDefinedFunctionType.Inline:
 							writer.Write("RETURN SELECT\r\n\t");
-							string delimiter = null;
-							foreach(Column column in udf.Columns)
-							{
-								if(delimiter == null)
-									delimiter = ",\r\n\t";
-								else
-									writer.Write(delimiter);
-								string dataTypeAsString = GetDataTypeAsString(column.DataType);
-								if(String.IsNullOrEmpty(column.Collation))
-									writer.Write("CAST(NULL AS {0}) AS {1}", dataTypeAsString, MakeSqlBracket(column.Name));
-								else
-									writer.Write("CAST(NULL AS {0}) COLLATE {1} AS {2}", dataTypeAsString, column.Collation, MakeSqlBracket(column.Name));
-							}
+							AppendHeaderColumnExpressions(writer, udf.Columns);
 							writer.WriteLine(';');
 							break;
 						case UserDefinedFunctionType.Scalar:
@@ -2919,6 +2921,11 @@ namespace Mercent.SqlServer.Management
 		private string GetDataTypeAsString(DataType dataType)
 		{
 			return utility.GetDataTypeAsString(dataType);
+		}
+
+		private string GetNonNullLiteral(DataType dataType)
+		{
+			return utility.GetNonNullLiteral(dataType);
 		}
 		
 		private string GetOrderByClauseForTable(Table table)
