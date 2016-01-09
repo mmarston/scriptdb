@@ -199,7 +199,7 @@ namespace Mercent.SqlServer.Management.Upgrade.Schema
 			packageFile.Directory.Create();
 
 			dacServices.Extract(packageFile.FullName, databaseName, databaseName, new Version(1, 0), extractOptions: extractOptions);
-			return DacPackage.Load(packageFile.FullName);
+			return DacPackage.Load(packageFile.FullName, DacSchemaModelStorageType.Memory);
 		}
 
 		/// <summary>
