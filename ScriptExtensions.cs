@@ -31,6 +31,19 @@ namespace Mercent.SqlServer.Management
 				.Any(c => c.DataType.SqlDataType == SqlDataType.Variant);
 		}
 
+		/// <summary>
+		/// Returns true if the table has a column of a unicode data type (nchar, ntext, nvarchar).
+		/// </summary>
+		public static bool HasAnyUnicodeColumns(this Table table)
+		{
+			if(table == null)
+				throw new ArgumentNullException("table");
+
+			return table.Columns
+				.Cast<Column>()
+				.Any(c => IsUnicode(c.DataType.SqlDataType));
+		}
+
 		public static bool HasAnyXmlColumns(this Table table)
 		{
 			if(table == null)
@@ -75,6 +88,23 @@ namespace Mercent.SqlServer.Management
 				throw new ArgumentNullException("table");
 
 			return new TableIdentifier(table.Schema, table.Name);
+		}
+
+		/// <summary>
+		/// Returns true if the data type is one of the following unicode types: NChar, NText, NVarChar or NVarCharMax.
+		/// </summary>
+		static bool IsUnicode(SqlDataType dataType)
+		{
+			switch(dataType)
+			{
+				case SqlDataType.NChar:
+				case SqlDataType.NText:
+				case SqlDataType.NVarChar:
+				case SqlDataType.NVarCharMax:
+					return true;
+				default:
+					return false;
+			}
 		}
 	}
 }

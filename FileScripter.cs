@@ -59,7 +59,7 @@ namespace Mercent.SqlServer.Management
 		private ScriptUtility utility;
 
 		private static readonly string DBName = "$(DBNAME)";
-		private static readonly HashSet<string> knownExtensions = new HashSet<string>(new [] { ".sql", ".cab", ".dat", ".fmt", ".udat", ".txt" }, StringComparer.OrdinalIgnoreCase);
+		private static readonly HashSet<string> knownExtensions = new HashSet<string>(new [] { ".sql", ".cab", ".dat", ".fmt", ".utxt", ".txt" }, StringComparer.OrdinalIgnoreCase);
 		
 		private string serverName;
 		public string ServerName
@@ -756,7 +756,7 @@ namespace Mercent.SqlServer.Management
 			string relativeName;
 			foreach(FileInfo fileInfo in dirInfo.GetFiles())
 			{
-				// Skip over the file if it isn't a known extension (.sql, .dat, .udat, .fmt).
+				// Skip over the file if it isn't a known extension (.sql, .dat, .utxt, .fmt).
 				if(!knownExtensions.Contains(fileInfo.Extension))
 					continue;
 				relativeName = Path.Combine(relativeDir, fileInfo.Name);
@@ -1307,6 +1307,13 @@ namespace Mercent.SqlServer.Management
 							// to be more easily viewed, edited, diff'd and merged.
 							ScriptTableData(table);
 						}
+						else if(table.HasAnyUnicodeColumns())
+						{
+							// If the table has any unicode columns then use a custom JSON-like UTF-16 BCP format.
+							// This format is designed to allow the file to be viewed in a text editor,
+							// diff'd and merged.
+							BulkCopyTableDataUtf16(table);
+						}
 						else
 						{
 							// Otherwise use BCP with a custom JSON-like text format.
@@ -1524,10 +1531,10 @@ namespace Mercent.SqlServer.Management
 			if(!Directory.Exists(dataDir))
 				Directory.CreateDirectory(dataDir);
 
-			// We use the ".udat" extension to distinguish it from other .dat files so that
-			// a text editor can be associated with the extension and so that source control
-			// systems can be configured to handle it appropriately.
-			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".udat");
+			// We use the ".utxt" extension to distinguish it from other text files
+			// so that source control systems can be configured to handle it appropriately
+			// (for example, git treates utf-16 as binary for diff and merge operations).
+			string relativeDataFile = Path.Combine(relativeDataDir, table.Name + ".utxt");
 
 			string dataFile = Path.Combine(OutputDirectory, relativeDataFile);
 			string tmpDataFile = dataFile + ".tmp";
@@ -1751,13 +1758,19 @@ namespace Mercent.SqlServer.Management
 			File.Delete(tmpDataFile);
 		}
 
+		private string EscapeTerminator(string value)
+		{
+			return value.Replace(@"\", @"\\");
+		}
+
 		private string EscapeUtf16BcpTerminator(string value)
 		{
 			StringBuilder result = new StringBuilder(value.Length * 3);
 			foreach(char ch in value)
 			{
 				result.Append(ch);
-				result.Append(@"\0");
+				if(ch != '\\')
+					result.Append(@"\0");
 			}
 			return result.ToString();
 		}
@@ -1889,7 +1902,7 @@ namespace Mercent.SqlServer.Management
 
 				// Use this column's name in the terminator for the next column
 				// ("next" in reverse, so really the preceeding column).
-				terminator = innerTerminatorSelector(columnName);
+				terminator = innerTerminatorSelector(EscapeTerminator(columnName));
 			}
 
 			string firstColumnName = (string)columns[0].Attribute("NAME");
@@ -1900,7 +1913,7 @@ namespace Mercent.SqlServer.Management
 				ns + "FIELD",
 				new XAttribute("ID", 0),
 				new XAttribute(xsi + "type", "CharTerm"),
-				new XAttribute("TERMINATOR", firstTerminatorSelector(firstColumnName)),
+				new XAttribute("TERMINATOR", firstTerminatorSelector(EscapeTerminator(firstColumnName))),
 				new XAttribute("MAX_LENGTH", 2)
 			);
 			record.AddFirst(paddingField);
