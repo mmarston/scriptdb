@@ -391,8 +391,8 @@ namespace Mercent.SqlServer.Management
 		/// The results of this method are used to create non-nullable expressions in the stubs (aka "headers")
 		/// for views and table-valued functions. Note that we don't attempt to make the literal value very specific
 		/// to the data type, rather we just need a value that can be cast to the specified type.
-		/// For example, we return "0x" for date and datetime, rather than "'1900-01-01'" and "'1900-01-01 00:00:00.000'").
-		/// This is because CAST(0x AS date) works just as well as CAST('1900-01-01' AS date).
+		/// For example, we return "''" for date and datetime, rather than "'1900-01-01'" and "'1900-01-01 00:00:00.000'").
+		/// This is because CAST('' AS date) works just as well as CAST('1900-01-01' AS date).
 		/// Note that we return null for CLR UDTs and other types this method doesn't currently support
 		/// since we don't know what value to use for them.
 		/// </remarks>
@@ -414,14 +414,8 @@ namespace Mercent.SqlServer.Management
 					// For number-related types, use literal 0.
 					return "0";
 				case SqlDataType.Binary:
-				case SqlDataType.Date:
-				case SqlDataType.DateTime:
-				case SqlDataType.DateTime2:
-				case SqlDataType.DateTimeOffset:
 				case SqlDataType.HierarchyId:
 				case SqlDataType.Image:
-				case SqlDataType.SmallDateTime:
-				case SqlDataType.Time:
 				case SqlDataType.Timestamp:
 				case SqlDataType.UniqueIdentifier:
 				case SqlDataType.VarBinary:
@@ -429,12 +423,18 @@ namespace Mercent.SqlServer.Management
 					// These types can be cast from an empty binary literal.
 					return "0x";
 				case SqlDataType.Char:
+				case SqlDataType.Date:
+				case SqlDataType.DateTime:
+				case SqlDataType.DateTime2:
+				case SqlDataType.DateTimeOffset:
 				case SqlDataType.NChar:
 				case SqlDataType.NText:
 				case SqlDataType.NVarChar:
 				case SqlDataType.NVarCharMax:
+				case SqlDataType.SmallDateTime:
 				case SqlDataType.SysName:
 				case SqlDataType.Text:
+				case SqlDataType.Time:
 				case SqlDataType.VarChar:
 				case SqlDataType.VarCharMax:
 				case SqlDataType.Variant:
