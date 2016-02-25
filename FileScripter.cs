@@ -200,29 +200,41 @@ namespace Mercent.SqlServer.Management
 			AddScriptFile(new ScriptFile(fileName, command));
 		}
 
-		private void AddUnicodeNativeDataFile(string dataFile, string schema, string table)
+		private void AddDataFileLoadCheck(string dataFile, string schema, string table, long rowCount)
+		{
+			string command =
+$@"IF (SELECT SUM(rows) FROM sys.partitions WHERE object_id = Object_ID('[{schema}].[{table}]') AND index_id IN (0, 1)) <> {rowCount}
+	RAISERROR('Error loading data file {dataFile} into [{schema}].[{table}]. The table does not have the expected row count ({rowCount}).', 11, 1);
+GO";
+			AddScriptFile(null, command);
+		}
+
+		private void AddUnicodeNativeDataFile(string dataFile, string schema, string table, long rowCount)
 		{
 			dataFile = CheckCompressFile(dataFile);
 			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -N -k -E", FileScripter.DBName, schema, table, dataFile);
 			AddScriptFile(dataFile, command);
+			AddDataFileLoadCheck(dataFile, schema, table, rowCount);
 		}
 
-		private void AddUtf16DataFile(string dataFile, string schema, string table)
+		private void AddUtf16DataFile(string dataFile, string schema, string table, long rowCount)
 		{
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
 			dataFile = CheckCompressFile(dataFile);
 			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -k -E -f \"{4}\"", FileScripter.DBName, schema, table, dataFile, formatFile);
 			AddScriptFile(dataFile, command);
 			AddScriptFile(formatFile, null);
+			AddDataFileLoadCheck(dataFile, schema, table, rowCount);
 		}
 
-		private void AddCodePageDataFile(string dataFile, string schema, string table, string codePage)
+		private void AddCodePageDataFile(string dataFile, string schema, string table, long rowCount, string codePage)
 		{
 			string formatFile = Path.ChangeExtension(dataFile, ".fmt");
 			dataFile = CheckCompressFile(dataFile);
 			string command = String.Format("!!bcp \"[{0}].[{1}].[{2}]\" in \"{3}\" -S $(SQLCMDSERVER) -T -C {4} -k -E -f \"{5}\"", FileScripter.DBName, schema, table, dataFile, codePage, formatFile);
 			AddScriptFile(dataFile, command);
 			AddScriptFile(formatFile, null);
+			AddDataFileLoadCheck(dataFile, schema, table, rowCount);
 		}
 
 		private void AddScriptFileRange(IEnumerable<string> fileNames)
@@ -444,7 +456,8 @@ namespace Mercent.SqlServer.Management
 					writer.WriteLine(":on error exit");
 					foreach(ScriptFile file in this.scriptFiles.Where(f => f.Command != null))
 					{
-						writer.WriteLine("PRINT '{0}'", file.FileName);
+						if(file.FileName != null)
+							writer.WriteLine("PRINT '{0}'", file.FileName);
 						writer.WriteLine("GO");
 						writer.WriteLine(file.Command);
 					}
@@ -1518,7 +1531,7 @@ namespace Mercent.SqlServer.Management
 
 			// We have to wait to add the file until after the file is generated
 			// because adding the file will check the file size.
-			AddUnicodeNativeDataFile(relativeDataFile, table.Schema, table.Name);
+			AddUnicodeNativeDataFile(relativeDataFile, table.Schema, table.Name, table.RowCount);
 		}
 
 		/// <summary>
@@ -1585,7 +1598,7 @@ namespace Mercent.SqlServer.Management
 
 			// We have to wait to add the file until after the file is generated
 			// because adding the file will check the file size.
-			AddUtf16DataFile(relativeDataFile, table.Schema, table.Name);
+			AddUtf16DataFile(relativeDataFile, table.Schema, table.Name, table.RowCount);
 		}
 
 		/// <summary>
@@ -1650,7 +1663,7 @@ namespace Mercent.SqlServer.Management
 
 			// We have to wait to add the file until after the file is generated
 			// because adding the file will check the file size.
-			AddCodePageDataFile(relativeDataFile, table.Schema, table.Name, codePage);
+			AddCodePageDataFile(relativeDataFile, table.Schema, table.Name, table.RowCount, codePage);
 		}
 
 		/// <summary>
@@ -1715,7 +1728,7 @@ namespace Mercent.SqlServer.Management
 
 			// We have to wait to add the file until after the file is generated
 			// because adding the file will check the file size.
-			AddCodePageDataFile(relativeDataFile, table.Schema, table.Name, codePage);
+			AddCodePageDataFile(relativeDataFile, table.Schema, table.Name, table.RowCount, codePage);
 		}
 
 		private bool SkipBulkCopyColumn(Column column)
