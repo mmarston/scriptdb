@@ -60,7 +60,7 @@ namespace Mercent.SqlServer.Management
 
 		private static readonly string DBName = "$(DBNAME)";
 		private static readonly HashSet<string> knownExtensions = new HashSet<string>(new [] { ".sql", ".cab", ".dat", ".fmt", ".utxt", ".txt" }, StringComparer.OrdinalIgnoreCase);
-		
+
 		private string serverName;
 		public string ServerName
 		{
@@ -74,7 +74,7 @@ namespace Mercent.SqlServer.Management
 			get { return databaseName; }
 			set { databaseName = value; }
 		}
-	
+
 		private string outputDirectory = "";
 		public string OutputDirectory
 		{
@@ -171,7 +171,7 @@ namespace Mercent.SqlServer.Management
 			AddScriptFile("obj", null);
 		}
 
-		
+
 		private void SaveIgnoreFiles()
 		{
 			if(ignoreFileSetModified)
@@ -180,7 +180,7 @@ namespace Mercent.SqlServer.Management
 				File.WriteAllLines(ignoreFileName, this.ignoreFileSet);
 			}
 		}
-		
+
 		private void AddScriptFile(ScriptFile scriptFile)
 		{
 			if(scriptFile == null)
@@ -203,8 +203,10 @@ namespace Mercent.SqlServer.Management
 		private void AddDataFileLoadCheck(string dataFile, string schema, string table, long rowCount)
 		{
 			string command =
-$@"IF (SELECT SUM(rows) FROM sys.partitions WHERE object_id = Object_ID('[{schema}].[{table}]') AND index_id IN (0, 1)) <> {rowCount}
-	RAISERROR('Error loading data file {dataFile} into [{schema}].[{table}]. The table does not have the expected row count ({rowCount}).', 11, 1);
+$@"DECLARE @actualCount int = (SELECT SUM(rows) FROM sys.partitions WHERE object_id = Object_ID('[{schema}].[{table}]') AND index_id IN (0, 1));
+IF @actualCount <> {rowCount}
+	RAISERROR('Error loading data file {dataFile} into [{schema}].[{table}].
+		The actual number of rows (%i) in the table does not equal the expected row count ({rowCount}).', 11, 1, @actualCount);
 GO";
 			AddScriptFile(null, command);
 		}
@@ -344,7 +346,7 @@ GO";
 
 		private object GetScriptingPreferences(ScriptingOptions options)
 		{
-			return typeof(ScriptingOptions).InvokeMember("GetScriptingPreferences", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.InvokeMethod, null, options, null);			
+			return typeof(ScriptingOptions).InvokeMember("GetScriptingPreferences", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.InvokeMethod, null, options, null);
 		}
 
 		public void Script()
@@ -384,7 +386,7 @@ GO";
 			connectionInfo.DatabaseName = DatabaseName;
 			ServerConnection connection = new ServerConnection(connectionInfo);
 			server = new Server(connection);
-			
+
 			// We get the database object by name then create a new server object and
 			// get the database object by id. This is so that the database object can
 			// be initialized with the Name property having correct character case.
@@ -865,7 +867,7 @@ GO";
 
 		private void ScriptAssemblies()
 		{
-			// Check to make sure that the database contains at least one assembly 
+			// Check to make sure that the database contains at least one assembly
 			// that is not a system object.
 			bool hasNonSystemAssembly = false;
 			foreach(SqlAssembly assembly in database.Assemblies)
@@ -876,7 +878,7 @@ GO";
 					break;
 				}
 			}
-			
+
 			if(!hasNonSystemAssembly)
 				return;
 
@@ -884,7 +886,7 @@ GO";
 			options.ExtendedProperties = true;
 			options.Permissions = true;
 			options.TargetServerVersion = this.TargetServerVersion;
-			
+
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
@@ -944,7 +946,7 @@ GO";
 							for(DependencyTreeNode child = tree.FirstChild.FirstChild; child != null; child = child.NextSibling)
 							{
 								// Make sure the object isn't another SqlAssembly that depends on this assembly
-								// because we don't want to include the script for the other assembly in the 
+								// because we don't want to include the script for the other assembly in the
 								// script for this assembly
 								if(child.Urn.Type != "SqlAssembly")
 								{
@@ -1006,7 +1008,7 @@ GO";
 			ScriptingOptions options = new ScriptingOptions();
 			options.ExtendedProperties = true;
 			options.TargetServerVersion = this.TargetServerVersion;
-			
+
 			options.AllowSystemObjects = false;
 			options.IncludeIfNotExists = true;
 			options.NoFileGroup = true;
@@ -1043,7 +1045,7 @@ GO";
 				writer.WriteLine("\tEND");
 				writer.WriteLine("END");
 				writer.WriteLine("GO");
-			
+
 				// Script out the database options.
 				StringCollection script = scripter.ScriptWithList(new SqlSmoObject[] { database });
 
@@ -1066,7 +1068,7 @@ GO";
 
 				// Add the database options to the file.
 				WriteBatches(writer, script);
-				
+
 				// Now that the datase exists, add USE statement so that all the following scripts use the database.
 				writer.WriteLine("USE [{0}]", FileScripter.DBName);
 				writer.WriteLine("GO");
@@ -1092,7 +1094,7 @@ GO";
 
 				string fileName = Path.Combine(relativeDir, "FileGroups.sql");
 				string outputFileName = Path.Combine(OutputDirectory, fileName);
-				
+
 				ScriptingOptions options = new ScriptingOptions();
 				options.Encoding = Encoding;
 				options.AllowSystemObjects = false;
@@ -1171,7 +1173,7 @@ GO";
 			Scripter tableScripter = new Scripter(server);
 			tableScripter.Options = tableOptions;
 			tableScripter.PrefetchObjects = false;
-			
+
 			// this list might be able to be trimmed down because
 			// some of the options may overlap (e.g. DriIndexes and Indexes).
 			ScriptingOptions kciOptions = new ScriptingOptions();
@@ -1764,7 +1766,7 @@ GO";
 
 				// Copy data from the tmp file.
 				source.CopyTo(destination);
-				
+
 				// Since we are overwriting the destination, ensure to set the proper length (in case the new data is smaller).
 				destination.SetLength(destination.Position);
 			}
@@ -2199,7 +2201,7 @@ GO";
 				string fileName = Path.Combine(relativeDir, view.Name + ".sql");
 				string outputFileName = Path.Combine(OutputDirectory, fileName);
 				OnProgressMessageReceived(fileName);
-				
+
 				objects[0] = view;
 				StringCollection script = viewScripter.ScriptWithList(objects);
 
@@ -2231,7 +2233,7 @@ GO";
 				else
 					nonSchemaBoundFileNames.Add(fileName);
 
-				
+
 			}
 		}
 
@@ -2468,11 +2470,11 @@ GO";
 				PrimaryObject = false,
 				TargetServerVersion = this.TargetServerVersion
 			};
-			
+
 			Scripter scripter = new Scripter(server);
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
-			
+
 			SqlSmoObject[] objects = new SqlSmoObject[1];
 			foreach (StoredProcedure sproc in sprocs)
 			{
@@ -2617,7 +2619,7 @@ GO";
 				string dir = Path.Combine(OutputDirectory, relativeDir);
 				if(!Directory.Exists(dir))
 					Directory.CreateDirectory(dir);
-				
+
 				string fileName = Path.Combine(relativeDir, "PartitionFunctions.sql");
 				ScriptingOptions options = new ScriptingOptions();
 				options.FileName = Path.Combine(OutputDirectory, fileName);
@@ -2667,7 +2669,7 @@ GO";
 				AddScriptFile(fileName);
 			}
 		}
-		
+
 		private void ScriptRoles()
 		{
 			UrnCollection urns = new UrnCollection();
@@ -2692,7 +2694,7 @@ GO";
 				TargetServerVersion = this.TargetServerVersion,
 				ToFileOnly = true
 			};
-			
+
 			if(!TargetDataTools)
 			{
 				options.IncludeIfNotExists = true;
@@ -2775,7 +2777,7 @@ GO";
 			scripter.Options = options;
 			scripter.PrefetchObjects = false;
 			scripter.ScriptWithList(urns);
-			
+
 			AddScriptFile(fileName);
 		}
 
@@ -2815,7 +2817,7 @@ GO";
 				AddScriptFile(relativeFilePath);
 			}
 		}
-		
+
 		private void ScriptSequences()
 		{
 			if(TargetServerVersion >= SqlServerVersion.Version110)
@@ -2865,7 +2867,7 @@ GO";
 			XmlReaderSettings readerSettings = new XmlReaderSettings();
 			readerSettings.ConformanceLevel = ConformanceLevel.Fragment;
 			SqlSmoObject[] objects = new SqlSmoObject[1];
-			
+
 			foreach(var group in groups)
 			{
 				string schema = group.Key;
@@ -2953,7 +2955,7 @@ GO";
 		{
 			return utility.GetNonNullLiteral(dataType);
 		}
-		
+
 		private string GetOrderByClauseForTable(Table table)
 		{
 			string checksumColumnList;
@@ -2971,7 +2973,7 @@ GO";
 			// 3) a unique key,
 			// or 4) a unique index
 			// There could be multiple of unique keys/indexes so we go with
-			// the one that comes first alphabetically. 
+			// the one that comes first alphabetically.
 			foreach(Index index in table.Indexes)
 			{
 				int currentRank = int.MaxValue;
