@@ -1,3 +1,6 @@
+# THIS PROJECT IS DEPRECATED
+scriptdb is no longer maintained, and **this** repository will be removed from GitHub on or after Tuesday, July 9, 2019.
+
 #ScriptDB - Database Source Control
 
 ##Description
