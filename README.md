@@ -4,6 +4,8 @@
 ScriptDB is a utility that generates scripts to recreate a SQL Server database.
 These scripts can be managed with a source control system to track and coordinate database changes.
 
+> See [our security policy](SECURITY.md) for handling of security-related matters.
+
 ##Usage
 To use ScriptDB, simply provide the server and database names:
 
@@ -31,7 +33,7 @@ of the output directory.
 
 ###Views
 View stubs are created in Views.sql and filled out in the corresonding _view_.sql file.
-When the scripts are run to create the database, Views.sql always runs first to allow anything 
+When the scripts are run to create the database, Views.sql always runs first to allow anything
 that depends a view to see the correct columns (the order in which views are filled out doesn't
 matter).
 
